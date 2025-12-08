@@ -35,7 +35,7 @@ def scrape():
     config = CrawlerRunConfig(
     cache_mode=CacheMode.BYPASS,
     extraction_strategy=extraction_strategy,
-    #js_code="document.querySelector('#aod-ingress-link')?.click();",
+    js_code="document.querySelector('.flex.justify-between.w-full.items-center.gap-2xsmall.text-absoluteDark.font-semibold.text-xsmall')?.click();",
     scan_full_page=True,
     scroll_delay=0.3,
     magic=True,
