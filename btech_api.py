@@ -38,8 +38,8 @@ def scrape():
     js_code="document.querySelector('.flex.justify-between.w-full.items-center.gap-2xsmall.text-absoluteDark.font-semibold.text-xsmall')?.click();",
     scan_full_page=True,
     scroll_delay=0.3,
-    magic=True,
-    #delay_before_return_html=3.0,   
+    #magic=True,
+    delay_before_return_html=1.0,   
     simulate_user=True    
 )
 
