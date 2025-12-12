@@ -35,6 +35,8 @@ def scrape():
     extraction_strategy = JsonCssExtractionStrategy(schema, verbose=True)
     js_code = """
     (async () => {
+        const uniqueOffers = [];
+        try {
         console.log("Starting JS code with User Strategy...");
         const selector = '.flex.justify-between.w-full.items-center.gap-2xsmall.text-absoluteDark.font-semibold.text-xsmall';
         
@@ -123,11 +125,10 @@ def scrape():
         }
         
         // Give a tiny buffer for layout to settle
-        await delay(500);
+        await delay(500); 
         
         // 5. Extract offers (Verified Logic)
         const offers = [];
-        // Use a broader search for "Sold by" to capture sidebar items
         const sellerPars = Array.from(document.querySelectorAll('p')).filter(p => p.textContent.includes('Sold by'));
         
         sellerPars.forEach(sellerP => {
@@ -169,7 +170,7 @@ def scrape():
         });
         
         // Deduplicate
-        const uniqueOffers = [];
+        // const uniqueOffers = []; // Removed to avoid shadowing
         const seen = new Set();
         offers.forEach(o => {
             const key = o.seller_name + o.price;
@@ -182,11 +183,17 @@ def scrape():
         console.log(`Extracted ${uniqueOffers.length} offers`);
         
         // Inject into DOM
-        const resultDiv = document.createElement('div');
-        resultDiv.id = 'extracted_offers_json';
-        resultDiv.textContent = JSON.stringify(uniqueOffers);
-        document.body.appendChild(resultDiv);
-        console.log("Injected extracted offers into DOM");
+        } catch (error) {
+            console.error("Error in JS execution:", error);
+        } finally {
+            // ALWAYS Inject into DOM (empty array if offers is undefined or error)
+            const resultDiv = document.createElement('div');
+            resultDiv.id = 'extracted_offers_json';
+            // ensure uniqueOffers exists from outer scope, or default to []
+            resultDiv.textContent = JSON.stringify(uniqueOffers || []);
+            document.body.appendChild(resultDiv);
+            console.log("Injected extracted offers into DOM (Final)");
+        }
     })();
     """
     config = CrawlerRunConfig(
@@ -196,7 +203,8 @@ def scrape():
     scan_full_page=True,
     scroll_delay=0.3,
     #magic=True,
-    delay_before_return_html=2.0,   
+    #delay_before_return_html=2.0,
+    wait_for="css:#extracted_offers_json",
     simulate_user=True    
 )
 
