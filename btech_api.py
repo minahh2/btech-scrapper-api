@@ -22,7 +22,7 @@ browser_config = BrowserConfig(
     #extra_args=["--no-sandbox", "--disable-gpu", "--disable-extensions"]
 )
 
-@app.route('/scrape_btech5', methods=['POST'])
+@app.route('/scrape_btech6', methods=['POST'])
 def scrape():
     data = request.get_json()
     urls = data.get("urls")
