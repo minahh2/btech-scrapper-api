@@ -22,7 +22,7 @@ browser_config = BrowserConfig(
     #extra_args=["--no-sandbox", "--disable-gpu", "--disable-extensions"]
 )
 
-@app.route('/scrape_btech7', methods=['POST'])
+@app.route('/scrape_btech8', methods=['POST'])
 def scrape():
     data = request.get_json()
     urls = data.get("urls")
@@ -37,57 +37,40 @@ def scrape():
     (async () => {
         const uniqueOffers = [];
         try {
-        console.log("Starting JS code with User Strategy...");
-        const selector = '.flex.justify-between.w-full.items-center.gap-2xsmall.text-absoluteDark.font-semibold.text-xsmall';
+        // 0. STRICT CHECK & FAST EXIT (Performance)
+        const bodyText = document.body.textContent || "";
+        const HAS_OTHER_OFFERS = bodyText.includes("Offers starting from") || bodyText.includes("Compare the best offers");
+        
+        if (!HAS_OTHER_OFFERS) {
+             console.log("Stict Check: No 'Offers starting from' text found. Assuming Single Offer Page.");
+             // FAST EXIT: Return empty array immediately.
+             const resultDiv = document.createElement('div');
+             resultDiv.id = 'extracted_offers_json';
+             resultDiv.textContent = JSON.stringify([]);
+             document.body.appendChild(resultDiv);
+             return; // EXIT SCRIPT
+        }
+        
+        console.log("Strict Check: Multi-offer text found. Enforcing Strict Wait Mode.");
         
         // Helper to wait
         const delay = ms => new Promise(res => setTimeout(res, ms));
         
-        // 1. Wait for element to exist
-        console.log("Waiting for element...");
-        let el = document.querySelector(selector);
-        let attempts = 0;
-        while (!el && attempts < 50) { // Wait up to 5 seconds
-            await delay(100);
-            el = document.querySelector(selector);
-            attempts++;
-        }
-        
-        if (!el) {
-            console.log("Element not found after waiting.");
-            return;
-        }
-        
-        // 2. Wait for text content to load (User observation)
-        console.log("Waiting for text content...");
-        attempts = 0;
-        while (attempts < 50) {
-            const text = el.textContent || "";
-            if (text.includes("Offers starting from") || text.includes("starting from")) {
-                console.log("Found expected text:", text);
-                break;
-            }
-            await delay(100);
-            attempts++;
-        }
-        
-        // 3. Click "Other Offers"
+        // 1. Click "Other Offers"
         console.log("Locating 'Compare the best offers' button...");
         
-        // Strategy: Find the text "Compare the best offers from other sellers"
-        // and click its closest button parent. This is the most robust method.
-        
-        const allElements = Array.from(document.querySelectorAll('*'));
+        // Target Logic: Find text node -> traverse to button
         let targetButton = null;
-        
-        // Iterate backwards (bottom-up) to find the last occurrence, closest to price text
+        const allElements = Array.from(document.querySelectorAll('*'));
+         
+        // Iterate backwards (bottom-up) to find the last occurrence
         for (let i = allElements.length - 1; i >= 0; i--) {
             const el = allElements[i];
             if (el.textContent && el.textContent.includes("Compare the best offers from other sellers") && el.children.length === 0) {
                  // Found the text node (or leaf element). Traverse up to find button.
                  let parent = el.parentElement;
                  while (parent && parent !== document.body) {
-                     if (parent.tagName === 'BUTTON' || parent.getAttribute('role') === 'button' || parent.classList.contains('cursor-pointer')) {
+                     if (parent.tagName === 'BUTTON' || parent.getAttribute('role') === 'button' || parent.classList.contains('cursor-pointer') || (parent.tagName === 'DIV' && parent.className.includes('flex'))) {
                          targetButton = parent;
                          break;
                      }
@@ -97,8 +80,10 @@ def scrape():
             }
         }
         
+        // Fallback or assignment
+        let el = null;
         if (targetButton) {
-             console.log("Found target button via text content:", targetButton);
+             console.log("Found target button via text content.");
              el = targetButton;
         } else {
              // Fallback: Use the specific text search on buttons directly
@@ -110,66 +95,86 @@ def scrape():
              
              if (specificButtons.length > 0) {
                  el = specificButtons[specificButtons.length - 1];
-                 console.log("Found target button via candidate filter:", el);
+                 console.log("Found target button via candidate filter.");
              } else {
                   console.log("Specific 'Compare the best offers' button NOT found. Assuming 1-Offer Page.");
-                  el = null;
+                  el = null; 
              }
         }
 
         if (el) {
             console.log("Scrolling to element...");
             el.scrollIntoView({behavior: "smooth", block: "center"});
-            await delay(1500); // Give it a moment to settle
+            await delay(2000); 
             
             console.log("Clicking element...");
             el.click();
+            await delay(500);
         } else {
-             console.error("No clickable element found for sidebar.");
+            console.log("No clickable element found for sidebar.");
         }
         
-        // 4. Wait for sidebar (Count-based Smart Wait)
+        if (el) {
+            el.scrollIntoView({behavior: "smooth", block: "center"});
+            await delay(1000);
+            el.click();
+        } else {
+            console.error("Critical: Could not find ANY 'Other offers' button to click.");
+        }
+        
+        // 4. Wait for sidebar (Strict Count Wait)
         console.log("Waiting for sidebar content...");
         
-        // Try to find expected count from SPECIFIC selector provided by user
-        let expectedCount = 1;
+        let expectedCount = 2; // Default to 2 since we PASSED strict check
+        let countTextForOutput = null; 
         const countSelector = "div.px-small.pt-small.flex.justify-between.items-center span.text-xsmall.font-medium.text-secondarySupportiveD3";
-        const countSpan = document.querySelector(countSelector);
+        
+        // STRICT WAIT for Count Element
+        let waitCountAttempts = 0;
+        let countSpan = null;
+        
+        while (!countSpan && waitCountAttempts < 100) { // Wait up to 10s for sidebar to populate
+             countSpan = document.querySelector(countSelector);
+             if (!countSpan) {
+                 const fallback = Array.from(document.querySelectorAll('span')).find(s => s.textContent.includes('sellers'));
+                 if (fallback) countSpan = fallback;
+             }
+             if (countSpan) break;
+             await delay(100);
+             waitCountAttempts++;
+        }
         
         if (countSpan) {
             console.log("DEBUG: Count Span found: ", countSpan.textContent);
+            countTextForOutput = countSpan.textContent.trim();
             const match = countSpan.textContent.match(/(\d+)/);
             if (match) {
                 expectedCount = parseInt(match[1]);
                 console.log(`Expecting exactly ${expectedCount} sellers based on selector.`);
             }
         } else {
-             // Fallback to broader search
-             console.log("DEBUG: Specific count selector failed. Trying broader search...");
-             const fallbackSpan = Array.from(document.querySelectorAll('span')).find(s => s.textContent.includes('sellers'));
-             if (fallbackSpan) {
-                 const match = fallbackSpan.textContent.match(/(\d+)/);
-                 if (match) {
-                     expectedCount = parseInt(match[1]);
-                     console.log(`Expecting exactly ${expectedCount} sellers based on fallback text: "${fallbackSpan.textContent}"`);
-                 }
-             } else {
-                 console.log("DEBUG: No 'sellers' count found. Defaulting to 1.");
-             }
+             console.log("WARN: Could not find specific 'sellers' count element after 10s. Defaulting to expected=2 (Strict Mode).");
         }
         
-        attempts = 0;
+        // Inject count text into DOM for schema extraction
+        if (countTextForOutput) {
+            const countDiv = document.createElement('div');
+            countDiv.id = 'debug_offer_count';
+            countDiv.textContent = countTextForOutput;
+            countDiv.style.display = 'none';
+            document.body.appendChild(countDiv);
+            console.log("Injected #debug_offer_count: " + countTextForOutput);
+        }
+
+        let attempts = 0;
         let stableMatches = 0;
         
         while (attempts < 150) { // Wait up to 15s max (polling)
              // 5. Extract offers (Verified Logic)
              const tempOffers = [];
-             let rejectedCount = 0; // Track rejected offers for Smart Accounting
+             let rejectedCount = 0;
              
-             // Use a broader search for "Sold by" to capture sidebar items
              const sellerPars = Array.from(document.querySelectorAll('p')).filter(p => p.textContent.includes('Sold by'));
-            
-             // We need to loop here to check extraction quality inside the wait loop
              sellerPars.forEach(sellerP => {
                 let container = sellerP.parentElement;
                 let priceEl = null;
@@ -179,12 +184,8 @@ def scrape():
                     if (!container) break;
                     const spans = Array.from(container.querySelectorAll('span'));
                     
-                    // STRICT PRICE CHECK: Regex for digits and commas only
                     const foundPrice = spans.find(s => {
                         const txt = s.textContent.trim();
-                        // Allows "3,857" or "3857" or "3,857.00" - generally numbers, commas, dots
-                        // User said remove "," then check if numerical.
-                        // Regex: Start, optional whitespace, digits/commas/dots, optional whitespace, End.
                         return /^\s*[\d,.]+\s*$/.test(txt) && !txt.includes('EGP');
                     });
                     
@@ -199,7 +200,6 @@ def scrape():
                 if (priceEl) {
                     let warrantyText = "";
                     if (warrantyEl) {
-                         // Warranty Logic (Verified)
                         const wTxt = warrantyEl.textContent.trim();
                         if (wTxt.toLowerCase() === "warranty" || wTxt.toLowerCase() === "warranty:") {
                             if (warrantyEl.nextElementSibling) {
