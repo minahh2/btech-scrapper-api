@@ -22,7 +22,7 @@ browser_config = BrowserConfig(
     #extra_args=["--no-sandbox", "--disable-gpu", "--disable-extensions"]
 )
 
-@app.route('/scrape_btech8', methods=['POST'])
+@app.route('/scrape_btech9', methods=['POST'])
 def scrape():
     data = request.get_json()
     urls = data.get("urls")
@@ -38,7 +38,7 @@ def scrape():
         const uniqueOffers = [];
         try {
         // 0. STRICT CHECK & FAST EXIT (Performance)
-        const bodyText = document.body.textContent || "";
+        const bodyText = document.body.innerText || "";
         const HAS_OTHER_OFFERS = bodyText.includes("Offers starting from") || bodyText.includes("Compare the best offers");
         
         if (!HAS_OTHER_OFFERS) {
