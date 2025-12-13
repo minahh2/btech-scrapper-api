@@ -82,103 +82,152 @@ def scrape():
         // 4. Wait for sidebar (Count-based Smart Wait)
         console.log("Waiting for sidebar content...");
         
-        // Try to find expected count from "X sellers" text
+        // Try to find expected count from SPECIFIC selector provided by user
         let expectedCount = 1;
-        // Selector for "X offers" or "X sellers" text
-        const countSpan = Array.from(document.querySelectorAll('span')).find(s => s.textContent.includes('sellers') || s.textContent.includes('offers'));
+        const countSelector = "div.px-small.pt-small.flex.justify-between.items-center span.text-xsmall.font-medium.text-secondarySupportiveD3";
+        const countSpan = document.querySelector(countSelector);
+        
         if (countSpan) {
+            console.log("DEBUG: Count Span found: ", countSpan.textContent);
             const match = countSpan.textContent.match(/(\d+)/);
             if (match) {
                 expectedCount = parseInt(match[1]);
-                // If expected count is high, we might count the main one too, so expect at least that many
-                console.log(`Expecting at least ${expectedCount} sellers based on text '${countSpan.textContent}'.`);
+                console.log(`Expecting exactly ${expectedCount} sellers based on selector.`);
             }
+        } else {
+             // Fallback to broader search
+             console.log("DEBUG: Specific count selector failed. Trying broader search...");
+             const fallbackSpan = Array.from(document.querySelectorAll('span')).find(s => s.textContent.includes('sellers'));
+             if (fallbackSpan) {
+                 const match = fallbackSpan.textContent.match(/(\d+)/);
+                 if (match) {
+                     expectedCount = parseInt(match[1]);
+                     console.log(`Expecting exactly ${expectedCount} sellers based on fallback text: "${fallbackSpan.textContent}"`);
+                 }
+             } else {
+                 console.log("DEBUG: No 'sellers' count found. Defaulting to 1.");
+             }
         }
         
         attempts = 0;
-        let stableCount = 0;
-        let lastCount = 0;
+        let stableMatches = 0;
         
-        while (attempts < 100) { // Wait up to 10s max (polling)
+        while (attempts < 150) { // Wait up to 15s max (polling)
+             // 5. Extract offers (Verified Logic)
+             const tempOffers = [];
+             // Use a broader search for "Sold by" to capture sidebar items
              const sellerPars = Array.from(document.querySelectorAll('p')).filter(p => p.textContent.includes('Sold by'));
-             const currentCount = sellerPars.length;
-             
-             // We want at least 2 distinct prices or sellers to ensure sidebar is loaded
-             // AND ideally match expected count
-             if (currentCount >= expectedCount || currentCount > 1) {
-                 if (currentCount === lastCount) {
-                     stableCount++;
-                 } else {
-                     stableCount = 0;
+            
+             // We need to loop here to check extraction quality inside the wait loop
+             sellerPars.forEach(sellerP => {
+                let container = sellerP.parentElement;
+                let priceEl = null;
+                let warrantyEl = null;
+                
+                for (let i = 0; i < 5; i++) {
+                    if (!container) break;
+                    const spans = Array.from(container.querySelectorAll('span'));
+                    
+                    // STRICT PRICE CHECK: Regex for digits and commas only
+                    const foundPrice = spans.find(s => {
+                        const txt = s.textContent.trim();
+                        // Allows "3,857" or "3857" or "3,857.00" - generally numbers, commas, dots
+                        // User said remove "," then check if numerical.
+                        // Regex: Start, optional whitespace, digits/commas/dots, optional whitespace, End.
+                        return /^\s*[\d,.]+\s*$/.test(txt) && !txt.includes('EGP');
+                    });
+                    
+                    if (foundPrice && container.textContent.includes('EGP')) {
+                        priceEl = foundPrice;
+                        warrantyEl = Array.from(container.querySelectorAll('p')).find(p => p.textContent.includes('Warranty'));
+                        break;
+                    }
+                    container = container.parentElement;
+                }
+                
+                if (priceEl) {
+                    let warrantyText = "";
+                    if (warrantyEl) {
+                         // Warranty Logic (Verified)
+                        const wTxt = warrantyEl.textContent.trim();
+                        if (wTxt.toLowerCase() === "warranty" || wTxt.toLowerCase() === "warranty:") {
+                            if (warrantyEl.nextElementSibling) {
+                                warrantyText = warrantyEl.nextElementSibling.textContent.trim();
+                            }
+                        } else if (wTxt.includes("Warranty:")) {
+                            warrantyText = wTxt.replace("Warranty:", "").trim();
+                        } else {
+                             warrantyText = wTxt; // Fallback
+                        }
+                    }
+                    
+                    const sName = sellerP.textContent.trim().replace('Sold by', '').trim();
+                    const pText = priceEl.textContent.trim();
+                    
+                    // FINAL VALIDATION
+                    if (sName.length > 0 && pText.length > 0) {
+                         tempOffers.push({
+                            price: pText,
+                            seller_name: sName,
+                            warranty: warrantyText
+                        });
+                    } else {
+                        console.log(`Rejected offer: Price='${pText}', Seller='${sName}'`);
+                    }
+                } else {
+                     // Log if price not found valid
+                     // console.log("No valid price found for checking container.");
+                }
+             });
+
+             // Deduplicate
+             const seen = new Set();
+             const cleanOffers = [];
+             tempOffers.forEach(o => {
+                 const key = o.seller_name + o.price;
+                 if (!seen.has(key)) {
+                     seen.add(key);
+                     cleanOffers.push(o);
                  }
+             });
+             
+             // VALIDATE COUNT
+             // If we found exactly what we expected (>1), we're good.
+             // If expected is 1, we might just be seeing the main one. Wait a bit to be sure.
+             if (cleanOffers.length === expectedCount) {
+                 if (cleanOffers.length > 1) {
+                     console.log(`Success! Found exactly ${cleanOffers.length} valid offers.`);
+                     uniqueOffers.push(...cleanOffers); 
+                     break;
+                 } else {
+                     // If we only expect 1, make sure it's STABLE (wait 5 iterations)
+                     stableMatches++;
+                     if (stableMatches > 5) {
+                         console.log(`Success! Found 1 valid offer and stable.`);
+                         uniqueOffers.push(...cleanOffers); 
+                         break;
+                     }
+                 }
+             } else {
+                 stableMatches = 0;
              }
              
-             // If we match expected OR we have >1 and it's stable for 500ms
-             if ((currentCount >= expectedCount && stableCount > 3) || stableCount > 8) {
-                 console.log(`Sidebar loaded. Found ${currentCount} sellers. Stable for ${stableCount*100}ms.`);
-                 break;
+             // If we have MORE than expected (unlikely given dedupe), accept it?
+             if (cleanOffers.length > expectedCount) {
+                  console.log(`Found MORE than expected (${cleanOffers.length} > ${expectedCount}). accepting.`);
+                  uniqueOffers.push(...cleanOffers); 
+                  break;
              }
              
-             lastCount = currentCount;
+             if (attempts % 10 === 0) console.log(`Attempt ${attempts}: Found ${cleanOffers.length}/${expectedCount} offers.`);
+             
              await delay(100);
              attempts++;
         }
         
-        // Give a tiny buffer for layout to settle
-        await delay(500); 
-        
-        // 5. Extract offers (Verified Logic)
-        const offers = [];
-        const sellerPars = Array.from(document.querySelectorAll('p')).filter(p => p.textContent.includes('Sold by'));
-        
-        sellerPars.forEach(sellerP => {
-            let container = sellerP.parentElement;
-            let priceEl = null;
-            let warrantyEl = null;
-            
-            for (let i = 0; i < 5; i++) {
-                if (!container) break;
-                const spans = Array.from(container.querySelectorAll('span'));
-                const foundPrice = spans.find(s => s.textContent.includes(',') && !s.textContent.includes('EGP'));
-                if (foundPrice && container.textContent.includes('EGP')) {
-                    priceEl = foundPrice;
-                    warrantyEl = Array.from(container.querySelectorAll('p')).find(p => p.textContent.includes('Warranty'));
-                    break;
-                }
-                container = container.parentElement;
-            }
-            
-            if (priceEl) {
-                let warrantyText = "";
-                if (warrantyEl) {
-                    warrantyText = warrantyEl.textContent.trim();
-                    if (warrantyText.toLowerCase() === "warranty" || warrantyText.toLowerCase() === "warranty:") {
-                        if (warrantyEl.nextElementSibling) {
-                            warrantyText = warrantyEl.nextElementSibling.textContent.trim();
-                        }
-                    } else if (warrantyText.includes("Warranty:")) {
-                        warrantyText = warrantyText.replace("Warranty:", "").trim();
-                    }
-                }
-                
-                offers.push({
-                    price: priceEl.textContent.trim(),
-                    seller_name: sellerP.textContent.trim().replace('Sold by', '').trim(),
-                    warranty: warrantyText
-                });
-            }
-        });
-        
-        // Deduplicate
-        // const uniqueOffers = []; // Removed to avoid shadowing
-        const seen = new Set();
-        offers.forEach(o => {
-            const key = o.seller_name + o.price;
-            if (!seen.has(key)) {
-                seen.add(key);
-                uniqueOffers.push(o);
-            }
-        });
+        if (uniqueOffers.length === 0 && attempts >= 150) {
+             console.log("Timed out waiting for offer count match.");
+        }
         
         console.log(`Extracted ${uniqueOffers.length} offers`);
         
