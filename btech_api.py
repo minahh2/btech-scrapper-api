@@ -22,7 +22,7 @@ browser_config = BrowserConfig(
     #extra_args=["--no-sandbox", "--disable-gpu", "--disable-extensions"]
 )
 
-@app.route('/scrape_btech6', methods=['POST'])
+@app.route('/scrape_btech7', methods=['POST'])
 def scrape():
     data = request.get_json()
     urls = data.get("urls")
@@ -71,13 +71,62 @@ def scrape():
             attempts++;
         }
         
-        // 3. Click
-        console.log("Scrolling to element...");
-        el.scrollIntoView({behavior: "smooth", block: "center"});
-        await delay(1000);
+        // 3. Click "Other Offers"
+        console.log("Locating 'Compare the best offers' button...");
         
-        console.log("Clicking element...");
-        el.click();
+        // Strategy: Find the text "Compare the best offers from other sellers"
+        // and click its closest button parent. This is the most robust method.
+        
+        const allElements = Array.from(document.querySelectorAll('*'));
+        let targetButton = null;
+        
+        // Iterate backwards (bottom-up) to find the last occurrence, closest to price text
+        for (let i = allElements.length - 1; i >= 0; i--) {
+            const el = allElements[i];
+            if (el.textContent && el.textContent.includes("Compare the best offers from other sellers") && el.children.length === 0) {
+                 // Found the text node (or leaf element). Traverse up to find button.
+                 let parent = el.parentElement;
+                 while (parent && parent !== document.body) {
+                     if (parent.tagName === 'BUTTON' || parent.getAttribute('role') === 'button' || parent.classList.contains('cursor-pointer')) {
+                         targetButton = parent;
+                         break;
+                     }
+                     parent = parent.parentElement;
+                 }
+                 if (targetButton) break;
+            }
+        }
+        
+        if (targetButton) {
+             console.log("Found target button via text content:", targetButton);
+             el = targetButton;
+        } else {
+             // Fallback: Use the specific text search on buttons directly
+             const candidates = Array.from(document.querySelectorAll('button, div[role="button"], .flex.justify-between'));
+             const specificButtons = candidates.filter(el => {
+                  const txt = el.textContent || "";
+                  return txt.includes("Compare the best offers");
+             });
+             
+             if (specificButtons.length > 0) {
+                 el = specificButtons[specificButtons.length - 1];
+                 console.log("Found target button via candidate filter:", el);
+             } else {
+                  console.log("Specific 'Compare the best offers' button NOT found. Assuming 1-Offer Page.");
+                  el = null;
+             }
+        }
+
+        if (el) {
+            console.log("Scrolling to element...");
+            el.scrollIntoView({behavior: "smooth", block: "center"});
+            await delay(1500); // Give it a moment to settle
+            
+            console.log("Clicking element...");
+            el.click();
+        } else {
+             console.error("No clickable element found for sidebar.");
+        }
         
         // 4. Wait for sidebar (Count-based Smart Wait)
         console.log("Waiting for sidebar content...");
@@ -115,6 +164,8 @@ def scrape():
         while (attempts < 150) { // Wait up to 15s max (polling)
              // 5. Extract offers (Verified Logic)
              const tempOffers = [];
+             let rejectedCount = 0; // Track rejected offers for Smart Accounting
+             
              // Use a broader search for "Sold by" to capture sidebar items
              const sellerPars = Array.from(document.querySelectorAll('p')).filter(p => p.textContent.includes('Sold by'));
             
@@ -172,7 +223,8 @@ def scrape():
                             warranty: warrantyText
                         });
                     } else {
-                        console.log(`Rejected offer: Price='${pText}', Seller='${sName}'`);
+                        rejectedCount++;
+                        // console.log(`Rejected offer: Price='${pText}', Seller='${sName}'`);
                     }
                 } else {
                      // Log if price not found valid
@@ -191,19 +243,32 @@ def scrape():
                  }
              });
              
-             // VALIDATE COUNT
-             // If we found exactly what we expected (>1), we're good.
-             // If expected is 1, we might just be seeing the main one. Wait a bit to be sure.
-             if (cleanOffers.length === expectedCount) {
-                 if (cleanOffers.length > 1) {
-                     console.log(`Success! Found exactly ${cleanOffers.length} valid offers.`);
-                     uniqueOffers.push(...cleanOffers); 
-                     break;
-                 } else {
-                     // If we only expect 1, make sure it's STABLE (wait 5 iterations)
-                     stableMatches++;
-                     if (stableMatches > 5) {
-                         console.log(`Success! Found 1 valid offer and stable.`);
+             // RETRY CLICK LOGIC (Stability Fix)
+             // If we expect > 1 offer, but stuck at 1 for > 5 seconds (50 attempts), try clicking again.
+             if (expectedCount > 1 && cleanOffers.length === 1 && attempts === 50 && el) {
+                 console.log("WARN: Stuck at 1 offer after 5s. Sidebar might not have opened. Retrying click...");
+                 el.scrollIntoView({behavior: "smooth", block: "center"});
+                 el.click();
+             }
+             
+             // VALIDATE COUNT (SMART ACCOUNTING)
+             const totalProcessed = cleanOffers.length + rejectedCount;
+             
+             // Success condition: We have processed enough offers to satisfy expected count
+             if (totalProcessed >= expectedCount) {
+                 if (cleanOffers.length > 0 || rejectedCount > 0) {
+                     // Check stability if we are exactly at expected
+                     if (totalProcessed === expectedCount && expectedCount === 1) {
+                          // Special stability for 1 item (main item usually)
+                          stableMatches++;
+                          if (stableMatches > 5) {
+                               console.log(`Success! Found ${cleanOffers.length} valid + ${rejectedCount} rejected. Total ${totalProcessed} matches expected.`);
+                               uniqueOffers.push(...cleanOffers);
+                               break;
+                          }
+                     } else {
+                         // For >1, we assume success if we hit the number
+                         console.log(`Success! Found ${cleanOffers.length} valid + ${rejectedCount} rejected. Total ${totalProcessed} >= expected ${expectedCount}.`);
                          uniqueOffers.push(...cleanOffers); 
                          break;
                      }
@@ -212,14 +277,14 @@ def scrape():
                  stableMatches = 0;
              }
              
-             // If we have MORE than expected (unlikely given dedupe), accept it?
-             if (cleanOffers.length > expectedCount) {
-                  console.log(`Found MORE than expected (${cleanOffers.length} > ${expectedCount}). accepting.`);
+             // If we have MORE than expected (possible if sidebar loaded extra stuff or we counted main + sidebar)
+             if (cleanOffers.length > expectedCount) { // Note: kept strict check for clean offers just in case
+                  console.log(`Found MORE valid offers than expected (${cleanOffers.length} > ${expectedCount}). accepting.`);
                   uniqueOffers.push(...cleanOffers); 
                   break;
              }
              
-             if (attempts % 10 === 0) console.log(`Attempt ${attempts}: Found ${cleanOffers.length}/${expectedCount} offers.`);
+             if (attempts % 10 === 0) console.log(`Attempt ${attempts}: Valid=${cleanOffers.length}, Rejected=${rejectedCount}, Expected=${expectedCount}`);
              
              await delay(100);
              attempts++;
