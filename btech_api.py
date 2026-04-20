@@ -11,16 +11,17 @@ from crawl4ai import (
 
 app = Flask(__name__)
 
-# 1. FIXED BROWSER CONFIG: Removed the flags that were blocking the Stealth Shield
+# 1. YOUR ORIGINAL CONFIG EXACTLY AS YOU HAD IT + Docker RAM protection
 browser_config = BrowserConfig(
     viewport_width=1920,
     viewport_height=1080,
-    # REMOVED: user_agent and user_agent_mode. We MUST let magic=True handle this!
+    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    user_agent_mode="random",
     extra_args=[
         "--disable-dev-shm-usage", # CRITICAL: Prevents Docker RAM crashes
         "--no-sandbox", 
-        "--disable-gpu"
-        # DELIBERATELY REMOVED: "--disable-extensions" so the stealth proxy can load
+        "--disable-gpu", 
+        "--disable-extensions"
     ]
 )
 
@@ -39,12 +40,11 @@ def scrape():
 
     extraction_strategy = JsonCssExtractionStrategy(schema, verbose=True)
     
-    # YOUR EXACT ORIGINAL JS CODE - 100% UNTOUCHED
+    # YOUR EXACT ORIGINAL JS CODE
     js_code = """
     (async () => {
         const uniqueOffers = [];
         try {
-        // 0. STRICT CHECK & FAST EXIT (Performance)
         const bodyText = document.body.innerText || "";
         const HAS_OTHER_OFFERS = bodyText.includes("Offers starting from") || bodyText.includes("Compare the best offers");
         
@@ -226,7 +226,6 @@ def scrape():
              });
              
              if (expectedCount > 1 && cleanOffers.length === 1 && attempts === 50 && el) {
-                 console.log("WARN: Stuck at 1 offer after 5s. Sidebar might not have opened. Retrying click...");
                  el.scrollIntoView({behavior: "smooth", block: "center"});
                  el.click();
              }
@@ -270,7 +269,7 @@ def scrape():
     })();
     """
 
-    # 2. FIXED CRAWLER CONFIG: magic=True is active with 30s timeouts
+    # 2. REMOVED MAGIC=TRUE (This was causing the Proxy direct failed error)
     config = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         extraction_strategy=extraction_strategy,
@@ -279,9 +278,7 @@ def scrape():
         scroll_delay=0.3,
         wait_for="css:#extracted_offers_json",
         simulate_user=True,
-        
-        magic=True,              # <--- THE SHIELD IS NOW UNBLOCKED
-        page_timeout=30000,      # <--- 30 Second Fast Fail
+        page_timeout=30000,      
         wait_for_timeout=30000 
     )
 
