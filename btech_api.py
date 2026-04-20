@@ -11,7 +11,7 @@ from crawl4ai import (
 
 app = Flask(__name__)
 
-# Global browser config
+# Global browser config (Cold Boot - No Persistent Context to avoid lock errors)
 browser_config = BrowserConfig(
     viewport_width=1920,
     viewport_height=1080,
@@ -25,14 +25,18 @@ browser_config = BrowserConfig(
 @app.route('/scrape_btech9', methods=['POST'])
 def scrape():
     data = request.get_json()
+    
+    if not data:
+         return jsonify({"error": "No JSON payload received"}), 400
+         
     urls = data.get("urls")
     schema = data.get("schema")
-   
 
     if not isinstance(urls, list) or not isinstance(schema, dict):
-        return jsonify({"error": "Invalid input"}), 400
+        return jsonify({"error": "Invalid input. 'urls' must be a list, 'schema' must be a dict."}), 400
 
     extraction_strategy = JsonCssExtractionStrategy(schema, verbose=True)
+    
     js_code = """
     (async () => {
         const uniqueOffers = [];
@@ -224,11 +228,7 @@ def scrape():
                         });
                     } else {
                         rejectedCount++;
-                        // console.log(`Rejected offer: Price='${pText}', Seller='${sName}'`);
                     }
-                } else {
-                     // Log if price not found valid
-                     // console.log("No valid price found for checking container.");
                 }
              });
 
@@ -244,7 +244,6 @@ def scrape():
              });
              
              // RETRY CLICK LOGIC (Stability Fix)
-             // If we expect > 1 offer, but stuck at 1 for > 5 seconds (50 attempts), try clicking again.
              if (expectedCount > 1 && cleanOffers.length === 1 && attempts === 50 && el) {
                  console.log("WARN: Stuck at 1 offer after 5s. Sidebar might not have opened. Retrying click...");
                  el.scrollIntoView({behavior: "smooth", block: "center"});
@@ -254,12 +253,9 @@ def scrape():
              // VALIDATE COUNT (SMART ACCOUNTING)
              const totalProcessed = cleanOffers.length + rejectedCount;
              
-             // Success condition: We have processed enough offers to satisfy expected count
              if (totalProcessed >= expectedCount) {
                  if (cleanOffers.length > 0 || rejectedCount > 0) {
-                     // Check stability if we are exactly at expected
                      if (totalProcessed === expectedCount && expectedCount === 1) {
-                          // Special stability for 1 item (main item usually)
                           stableMatches++;
                           if (stableMatches > 5) {
                                console.log(`Success! Found ${cleanOffers.length} valid + ${rejectedCount} rejected. Total ${totalProcessed} matches expected.`);
@@ -267,7 +263,6 @@ def scrape():
                                break;
                           }
                      } else {
-                         // For >1, we assume success if we hit the number
                          console.log(`Success! Found ${cleanOffers.length} valid + ${rejectedCount} rejected. Total ${totalProcessed} >= expected ${expectedCount}.`);
                          uniqueOffers.push(...cleanOffers); 
                          break;
@@ -277,8 +272,7 @@ def scrape():
                  stableMatches = 0;
              }
              
-             // If we have MORE than expected (possible if sidebar loaded extra stuff or we counted main + sidebar)
-             if (cleanOffers.length > expectedCount) { // Note: kept strict check for clean offers just in case
+             if (cleanOffers.length > expectedCount) { 
                   console.log(`Found MORE valid offers than expected (${cleanOffers.length} > ${expectedCount}). accepting.`);
                   uniqueOffers.push(...cleanOffers); 
                   break;
@@ -296,32 +290,30 @@ def scrape():
         
         console.log(`Extracted ${uniqueOffers.length} offers`);
         
-        // Inject into DOM
         } catch (error) {
             console.error("Error in JS execution:", error);
         } finally {
-            // ALWAYS Inject into DOM (empty array if offers is undefined or error)
+            // ALWAYS Inject into DOM
             const resultDiv = document.createElement('div');
             resultDiv.id = 'extracted_offers_json';
-            // ensure uniqueOffers exists from outer scope, or default to []
             resultDiv.textContent = JSON.stringify(uniqueOffers || []);
             document.body.appendChild(resultDiv);
             console.log("Injected extracted offers into DOM (Final)");
         }
     })();
     """
-    config = CrawlerRunConfig(
-    cache_mode=CacheMode.BYPASS,
-    extraction_strategy=extraction_strategy,
-    js_code=js_code,
-    scan_full_page=True,
-    scroll_delay=0.3,
-    #magic=True,
-    #delay_before_return_html=2.0,
-    wait_for="css:#extracted_offers_json",
-    simulate_user=True    
-)
 
+    # INCREASED TIMEOUT: 180 seconds (180,000 ms) inside Playwright
+    config = CrawlerRunConfig(
+        cache_mode=CacheMode.BYPASS,
+        extraction_strategy=extraction_strategy,
+        js_code=js_code,
+        scan_full_page=True,
+        scroll_delay=0.3,
+        wait_for="css:#extracted_offers_json",
+        simulate_user=True,
+        page_timeout=180000 
+    )
 
     async def run_scraper():
         async with AsyncWebCrawler(config=browser_config, verbose=True) as crawler:
@@ -346,13 +338,15 @@ def scrape():
                     })
             return output
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    # MEMORY SAFE ASYNC EXECUTION: Guarantees Zombie browsers are killed
     try:
-        result = loop.run_until_complete(asyncio.wait_for(run_scraper(), timeout=60))
+        result = asyncio.run(run_scraper())
         return jsonify(result)
-    except asyncio.TimeoutError:
-        return jsonify({"error": "Scraping timed out"}), 504
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5002)
+    from waitress import serve
+    print("🚀 Starting B.TECH production server with Waitress...")
+    # Waitress queue prevents OS thread limits from being exceeded
+    serve(app, host='0.0.0.0', port=5002, threads=4)
