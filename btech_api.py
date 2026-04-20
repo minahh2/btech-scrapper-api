@@ -11,36 +11,28 @@ from crawl4ai import (
 
 app = Flask(__name__)
 
-# STRICTLY YOUR ORIGINAL CONFIG + Docker RAM protection
+# Global browser config
 browser_config = BrowserConfig(
     viewport_width=1920,
     viewport_height=1080,
-    #user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-    #user_agent_mode="random",
-    extra_args=[
-        "--disable-dev-shm-usage", # CRITICAL: Prevents Docker RAM crashes
-        "--no-sandbox", 
-        "--disable-gpu", 
-        "--disable-extensions"
-    ]
+    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    user_agent_mode="random",
+    #text_mode=True,
+    #light_mode=True,
+    #extra_args=["--no-sandbox", "--disable-gpu", "--disable-extensions"]
 )
 
 @app.route('/scrape_btech9', methods=['POST'])
 def scrape():
     data = request.get_json()
-    
-    if not data:
-         return jsonify({"error": "No JSON payload received"}), 400
-         
     urls = data.get("urls")
     schema = data.get("schema")
+   
 
     if not isinstance(urls, list) or not isinstance(schema, dict):
         return jsonify({"error": "Invalid input"}), 400
 
     extraction_strategy = JsonCssExtractionStrategy(schema, verbose=True)
-    
-    # YOUR EXACT ORIGINAL JS CODE - 100% UNTOUCHED
     js_code = """
     (async () => {
         const uniqueOffers = [];
@@ -75,6 +67,7 @@ def scrape():
         for (let i = allElements.length - 1; i >= 0; i--) {
             const el = allElements[i];
             if (el.textContent && el.textContent.includes("Compare the best offers from other sellers") && el.children.length === 0) {
+                 // Found the text node (or leaf element). Traverse up to find button.
                  let parent = el.parentElement;
                  while (parent && parent !== document.body) {
                      if (parent.tagName === 'BUTTON' || parent.getAttribute('role') === 'button' || parent.classList.contains('cursor-pointer') || (parent.tagName === 'DIV' && parent.className.includes('flex'))) {
@@ -93,6 +86,7 @@ def scrape():
              console.log("Found target button via text content.");
              el = targetButton;
         } else {
+             // Fallback: Use the specific text search on buttons directly
              const candidates = Array.from(document.querySelectorAll('button, div[role="button"], .flex.justify-between'));
              const specificButtons = candidates.filter(el => {
                   const txt = el.textContent || "";
@@ -230,7 +224,11 @@ def scrape():
                         });
                     } else {
                         rejectedCount++;
+                        // console.log(`Rejected offer: Price='${pText}', Seller='${sName}'`);
                     }
+                } else {
+                     // Log if price not found valid
+                     // console.log("No valid price found for checking container.");
                 }
              });
 
@@ -246,6 +244,7 @@ def scrape():
              });
              
              // RETRY CLICK LOGIC (Stability Fix)
+             // If we expect > 1 offer, but stuck at 1 for > 5 seconds (50 attempts), try clicking again.
              if (expectedCount > 1 && cleanOffers.length === 1 && attempts === 50 && el) {
                  console.log("WARN: Stuck at 1 offer after 5s. Sidebar might not have opened. Retrying click...");
                  el.scrollIntoView({behavior: "smooth", block: "center"});
@@ -255,9 +254,12 @@ def scrape():
              // VALIDATE COUNT (SMART ACCOUNTING)
              const totalProcessed = cleanOffers.length + rejectedCount;
              
+             // Success condition: We have processed enough offers to satisfy expected count
              if (totalProcessed >= expectedCount) {
                  if (cleanOffers.length > 0 || rejectedCount > 0) {
+                     // Check stability if we are exactly at expected
                      if (totalProcessed === expectedCount && expectedCount === 1) {
+                          // Special stability for 1 item (main item usually)
                           stableMatches++;
                           if (stableMatches > 5) {
                                console.log(`Success! Found ${cleanOffers.length} valid + ${rejectedCount} rejected. Total ${totalProcessed} matches expected.`);
@@ -265,6 +267,7 @@ def scrape():
                                break;
                           }
                      } else {
+                         // For >1, we assume success if we hit the number
                          console.log(`Success! Found ${cleanOffers.length} valid + ${rejectedCount} rejected. Total ${totalProcessed} >= expected ${expectedCount}.`);
                          uniqueOffers.push(...cleanOffers); 
                          break;
@@ -274,7 +277,8 @@ def scrape():
                  stableMatches = 0;
              }
              
-             if (cleanOffers.length > expectedCount) { 
+             // If we have MORE than expected (possible if sidebar loaded extra stuff or we counted main + sidebar)
+             if (cleanOffers.length > expectedCount) { // Note: kept strict check for clean offers just in case
                   console.log(`Found MORE valid offers than expected (${cleanOffers.length} > ${expectedCount}). accepting.`);
                   uniqueOffers.push(...cleanOffers); 
                   break;
@@ -292,32 +296,32 @@ def scrape():
         
         console.log(`Extracted ${uniqueOffers.length} offers`);
         
+        // Inject into DOM
         } catch (error) {
             console.error("Error in JS execution:", error);
         } finally {
             // ALWAYS Inject into DOM (empty array if offers is undefined or error)
             const resultDiv = document.createElement('div');
             resultDiv.id = 'extracted_offers_json';
+            // ensure uniqueOffers exists from outer scope, or default to []
             resultDiv.textContent = JSON.stringify(uniqueOffers || []);
             document.body.appendChild(resultDiv);
             console.log("Injected extracted offers into DOM (Final)");
         }
     })();
     """
-
-    # 30-SECOND FAST FAIL TIMEOUTS
     config = CrawlerRunConfig(
-        cache_mode=CacheMode.BYPASS,
-        extraction_strategy=extraction_strategy,
-        js_code=js_code,
-        scan_full_page=True,
-        scroll_delay=0.3,
-        wait_for="css:#extracted_offers_json",
-        simulate_user=True,
-        magic=True,
-        page_timeout=30000,      # <--- Give up and close browser after 30 seconds
-        wait_for_timeout=30000   # <--- Match wait condition timeout to 30 seconds
-    )
+    cache_mode=CacheMode.BYPASS,
+    extraction_strategy=extraction_strategy,
+    js_code=js_code,
+    scan_full_page=True,
+    scroll_delay=0.3,
+    #magic=True,
+    #delay_before_return_html=2.0,
+    wait_for="css:#extracted_offers_json",
+    simulate_user=True    
+)
+
 
     async def run_scraper():
         async with AsyncWebCrawler(config=browser_config, verbose=True) as crawler:
@@ -342,15 +346,13 @@ def scrape():
                     })
             return output
 
-    # MEMORY SAFE ASYNC EXECUTION (Fixes the Zombie PID crash)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
-        result = asyncio.run(run_scraper())
+        result = loop.run_until_complete(asyncio.wait_for(run_scraper(), timeout=60))
         return jsonify(result)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except asyncio.TimeoutError:
+        return jsonify({"error": "Scraping timed out"}), 504
 
 if __name__ == '__main__':
-    from waitress import serve
-    print("🚀 Starting B.TECH production server with Waitress...")
-    # The Bouncer: limits threads to 2 so your VPS runs perfectly
-    serve(app, host='0.0.0.0', port=5002, threads=2)
+    app.run(host='0.0.0.0', port=5002)
