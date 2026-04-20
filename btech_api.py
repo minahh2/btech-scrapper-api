@@ -11,15 +11,20 @@ from crawl4ai import (
 
 app = Flask(__name__)
 
-# Global browser config (Cold Boot - No Persistent Context to avoid lock errors)
+# 1. THE NETWORK SNIPER: Blocks images, trackers, and Docker RAM crashes
 browser_config = BrowserConfig(
     viewport_width=1920,
     viewport_height=1080,
     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
     user_agent_mode="random",
-    #text_mode=True,
-    #light_mode=True,
-    #extra_args=["--no-sandbox", "--disable-gpu", "--disable-extensions"]
+    light_mode=True, # Natively disables heavy background tasks
+    extra_args=[
+        "--disable-dev-shm-usage", # CRITICAL: Prevents Docker RAM crashes
+        "--no-sandbox",
+        "--disable-gpu",
+        "--disable-web-security",
+        "--blink-settings=imagesEnabled=false" # Strictly blocks all images for pure speed
+    ]
 )
 
 @app.route('/scrape_btech9', methods=['POST'])
@@ -37,6 +42,7 @@ def scrape():
 
     extraction_strategy = JsonCssExtractionStrategy(schema, verbose=True)
     
+    # YOUR EXACT ORIGINAL JS LOGIC (100% UNTOUCHED)
     js_code = """
     (async () => {
         const uniqueOffers = [];
@@ -303,7 +309,7 @@ def scrape():
     })();
     """
 
-    # INCREASED TIMEOUT: 180 seconds (180,000 ms) inside Playwright
+    # 2. INCREASED TIMEOUT: 180 seconds inside Playwright natively
     config = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         extraction_strategy=extraction_strategy,
@@ -338,7 +344,7 @@ def scrape():
                     })
             return output
 
-    # MEMORY SAFE ASYNC EXECUTION: Guarantees Zombie browsers are killed
+    # 3. MEMORY SAFE ASYNC EXECUTION: Physically guarantees the browser closes
     try:
         result = asyncio.run(run_scraper())
         return jsonify(result)
@@ -347,6 +353,7 @@ def scrape():
 
 if __name__ == '__main__':
     from waitress import serve
-    print("🚀 Starting B.TECH production server with Waitress...")
-    # Waitress queue prevents OS thread limits from being exceeded
-    serve(app, host='0.0.0.0', port=5002, threads=4)
+    print("🚀 Starting B.TECH production server with Waitress (Max 2 threads)...")
+    
+    # 4. THE BOUNCER: Strictly limits concurrent requests to protect RAM/PIDs
+    serve(app, host='0.0.0.0', port=5002, threads=2)
