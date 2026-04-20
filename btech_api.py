@@ -11,24 +11,18 @@ from crawl4ai import (
 
 app = Flask(__name__)
 
-# 1. THE NETWORK SNIPER (DNS Blackholing)
-# We map known ad networks and analytics trackers to 127.0.0.1 so the browser drops them instantly.
+# STRICTLY YOUR ORIGINAL CONFIG + Docker RAM protection
 browser_config = BrowserConfig(
     viewport_width=1920,
     viewport_height=1080,
     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
     user_agent_mode="random",
-    # light_mode=True, # REMOVED: This can sometimes trigger anti-bot systems
-    #text_mode=True,
-    #extra_args=[
-        #"--disable-dev-shm-usage", # CRITICAL: Prevents Docker RAM crashes
-        #"--no-sandbox",
-        #"--disable-gpu",
-        # "--disable-web-security", # REMOVED: Triggered B.TECH WAF
-        # "--blink-settings=imagesEnabled=false", # REMOVED: Triggered B.TECH WAF
-        # NEW: Blackholing heavy trackers and analytics at the OS network level
-        #"--host-resolver-rules=MAP *google-analytics.com 127.0.0.1, MAP *googletagmanager.com 127.0.0.1, MAP *facebook.net 127.0.0.1, MAP *criteo.com 127.0.0.1, MAP *hotjar.com 127.0.0.1, MAP *adsystem.com 127.0.0.1"
-    #]
+    extra_args=[
+        "--disable-dev-shm-usage", # CRITICAL: Prevents Docker RAM crashes
+        "--no-sandbox", 
+        "--disable-gpu", 
+        "--disable-extensions"
+    ]
 )
 
 @app.route('/scrape_btech9', methods=['POST'])
@@ -42,24 +36,13 @@ def scrape():
     schema = data.get("schema")
 
     if not isinstance(urls, list) or not isinstance(schema, dict):
-        return jsonify({"error": "Invalid input. 'urls' must be a list, 'schema' must be a dict."}), 400
+        return jsonify({"error": "Invalid input"}), 400
 
     extraction_strategy = JsonCssExtractionStrategy(schema, verbose=True)
     
-    # YOUR EXACT ORIGINAL JS LOGIC + NEW DOM CLEANUP
+    # YOUR EXACT ORIGINAL JS CODE - 100% UNTOUCHED
     js_code = """
     (async () => {
-        // --- NEW: DOM CLEANUP (Lighten the scrape) ---
-        // We instantly delete heavy layout elements that we don't need before parsing
-        try {
-            const trashSelectors = ['header', 'footer', 'nav', 'aside', 'iframe', 'noscript', '.ads-banner', '.newsletter-popup'];
-            document.querySelectorAll(trashSelectors.join(',')).forEach(el => el.remove());
-            console.log("Optimized DOM: Removed headers, footers, and iframes.");
-        } catch(e) {
-            console.log("DOM Cleanup error: ", e);
-        }
-        // ---------------------------------------------
-
         const uniqueOffers = [];
         try {
         // 0. STRICT CHECK & FAST EXIT (Performance)
@@ -148,7 +131,7 @@ def scrape():
         // 4. Wait for sidebar (Strict Count Wait)
         console.log("Waiting for sidebar content...");
         
-        let expectedCount = 2; 
+        let expectedCount = 2; // Default to 2 since we PASSED strict check
         let countTextForOutput = null; 
         const countSelector = "div.px-small.pt-small.flex.justify-between.items-center span.text-xsmall.font-medium.text-secondarySupportiveD3";
         
@@ -156,7 +139,7 @@ def scrape():
         let waitCountAttempts = 0;
         let countSpan = null;
         
-        while (!countSpan && waitCountAttempts < 100) { 
+        while (!countSpan && waitCountAttempts < 100) { // Wait up to 10s for sidebar to populate
              countSpan = document.querySelector(countSelector);
              if (!countSpan) {
                  const fallback = Array.from(document.querySelectorAll('span')).find(s => s.textContent.includes('sellers'));
@@ -168,25 +151,32 @@ def scrape():
         }
         
         if (countSpan) {
+            console.log("DEBUG: Count Span found: ", countSpan.textContent);
             countTextForOutput = countSpan.textContent.trim();
             const match = countSpan.textContent.match(/(\d+)/);
             if (match) {
                 expectedCount = parseInt(match[1]);
+                console.log(`Expecting exactly ${expectedCount} sellers based on selector.`);
             }
+        } else {
+             console.log("WARN: Could not find specific 'sellers' count element after 10s. Defaulting to expected=2 (Strict Mode).");
         }
         
+        // Inject count text into DOM for schema extraction
         if (countTextForOutput) {
             const countDiv = document.createElement('div');
             countDiv.id = 'debug_offer_count';
             countDiv.textContent = countTextForOutput;
             countDiv.style.display = 'none';
             document.body.appendChild(countDiv);
+            console.log("Injected #debug_offer_count: " + countTextForOutput);
         }
 
         let attempts = 0;
         let stableMatches = 0;
         
-        while (attempts < 150) { 
+        while (attempts < 150) { // Wait up to 15s max (polling)
+             // 5. Extract offers (Verified Logic)
              const tempOffers = [];
              let rejectedCount = 0;
              
@@ -224,13 +214,14 @@ def scrape():
                         } else if (wTxt.includes("Warranty:")) {
                             warrantyText = wTxt.replace("Warranty:", "").trim();
                         } else {
-                             warrantyText = wTxt; 
+                             warrantyText = wTxt; // Fallback
                         }
                     }
                     
                     const sName = sellerP.textContent.trim().replace('Sold by', '').trim();
                     const pText = priceEl.textContent.trim();
                     
+                    // FINAL VALIDATION
                     if (sName.length > 0 && pText.length > 0) {
                          tempOffers.push({
                             price: pText,
@@ -243,6 +234,7 @@ def scrape():
                 }
              });
 
+             // Deduplicate
              const seen = new Set();
              const cleanOffers = [];
              tempOffers.forEach(o => {
@@ -253,11 +245,14 @@ def scrape():
                  }
              });
              
+             // RETRY CLICK LOGIC (Stability Fix)
              if (expectedCount > 1 && cleanOffers.length === 1 && attempts === 50 && el) {
+                 console.log("WARN: Stuck at 1 offer after 5s. Sidebar might not have opened. Retrying click...");
                  el.scrollIntoView({behavior: "smooth", block: "center"});
                  el.click();
              }
              
+             // VALIDATE COUNT (SMART ACCOUNTING)
              const totalProcessed = cleanOffers.length + rejectedCount;
              
              if (totalProcessed >= expectedCount) {
@@ -265,10 +260,12 @@ def scrape():
                      if (totalProcessed === expectedCount && expectedCount === 1) {
                           stableMatches++;
                           if (stableMatches > 5) {
+                               console.log(`Success! Found ${cleanOffers.length} valid + ${rejectedCount} rejected. Total ${totalProcessed} matches expected.`);
                                uniqueOffers.push(...cleanOffers);
                                break;
                           }
                      } else {
+                         console.log(`Success! Found ${cleanOffers.length} valid + ${rejectedCount} rejected. Total ${totalProcessed} >= expected ${expectedCount}.`);
                          uniqueOffers.push(...cleanOffers); 
                          break;
                      }
@@ -278,26 +275,37 @@ def scrape():
              }
              
              if (cleanOffers.length > expectedCount) { 
+                  console.log(`Found MORE valid offers than expected (${cleanOffers.length} > ${expectedCount}). accepting.`);
                   uniqueOffers.push(...cleanOffers); 
                   break;
              }
+             
+             if (attempts % 10 === 0) console.log(`Attempt ${attempts}: Valid=${cleanOffers.length}, Rejected=${rejectedCount}, Expected=${expectedCount}`);
              
              await delay(100);
              attempts++;
         }
         
+        if (uniqueOffers.length === 0 && attempts >= 150) {
+             console.log("Timed out waiting for offer count match.");
+        }
+        
+        console.log(`Extracted ${uniqueOffers.length} offers`);
+        
         } catch (error) {
             console.error("Error in JS execution:", error);
         } finally {
+            // ALWAYS Inject into DOM (empty array if offers is undefined or error)
             const resultDiv = document.createElement('div');
             resultDiv.id = 'extracted_offers_json';
             resultDiv.textContent = JSON.stringify(uniqueOffers || []);
             document.body.appendChild(resultDiv);
+            console.log("Injected extracted offers into DOM (Final)");
         }
     })();
     """
 
-    # 2. OPTIMIZED CRAWLER CONFIG
+    # 30-SECOND FAST FAIL TIMEOUTS
     config = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         extraction_strategy=extraction_strategy,
@@ -306,12 +314,8 @@ def scrape():
         scroll_delay=0.3,
         wait_for="css:#extracted_offers_json",
         simulate_user=True,
-        page_timeout=60000,
-        
-        # --- NEW: Structural Blacklisting ---
-        exclude_external_links=True, # Prevents Playwright from parsing outbound links
-        exclude_social_media_links=True,
-        excluded_tags=['header', 'footer', 'nav', 'aside', 'svg'] # Tells Crawl4AI to ignore these in markdown extraction
+        page_timeout=30000,      # <--- Give up and close browser after 30 seconds
+        wait_for_timeout=30000   # <--- Match wait condition timeout to 30 seconds
     )
 
     async def run_scraper():
@@ -337,7 +341,7 @@ def scrape():
                     })
             return output
 
-    # 3. MEMORY SAFE ASYNC EXECUTION
+    # MEMORY SAFE ASYNC EXECUTION (Fixes the Zombie PID crash)
     try:
         result = asyncio.run(run_scraper())
         return jsonify(result)
@@ -346,5 +350,6 @@ def scrape():
 
 if __name__ == '__main__':
     from waitress import serve
-    print("🚀 Starting B.TECH production server with Waitress (Max 2 threads)...")
+    print("🚀 Starting B.TECH production server with Waitress...")
+    # The Bouncer: limits threads to 2 so your VPS runs perfectly
     serve(app, host='0.0.0.0', port=5002, threads=2)
