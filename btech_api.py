@@ -27,7 +27,7 @@ browser_config = BrowserConfig(
         # "--disable-web-security", # REMOVED: Triggered B.TECH WAF
         # "--blink-settings=imagesEnabled=false", # REMOVED: Triggered B.TECH WAF
         # NEW: Blackholing heavy trackers and analytics at the OS network level
-        "--host-resolver-rules=MAP *google-analytics.com 127.0.0.1, MAP *googletagmanager.com 127.0.0.1, MAP *facebook.net 127.0.0.1, MAP *criteo.com 127.0.0.1, MAP *hotjar.com 127.0.0.1, MAP *adsystem.com 127.0.0.1"
+        #"--host-resolver-rules=MAP *google-analytics.com 127.0.0.1, MAP *googletagmanager.com 127.0.0.1, MAP *facebook.net 127.0.0.1, MAP *criteo.com 127.0.0.1, MAP *hotjar.com 127.0.0.1, MAP *adsystem.com 127.0.0.1"
     ]
 )
 
