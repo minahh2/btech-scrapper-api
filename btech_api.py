@@ -19,7 +19,7 @@ browser_config = BrowserConfig(
     user_agent_mode="random",
     extra_args=[
         "--disable-dev-shm-usage", # CRITICAL: Prevents Docker RAM crashes
-        "--no-sandbox", 
+        #"--no-sandbox", 
         "--disable-gpu", 
         "--disable-extensions"
     ]
