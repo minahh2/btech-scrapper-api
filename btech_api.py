@@ -20,15 +20,15 @@ browser_config = BrowserConfig(
     user_agent_mode="random",
     # light_mode=True, # REMOVED: This can sometimes trigger anti-bot systems
     #text_mode=True,
-    extra_args=[
-        "--disable-dev-shm-usage", # CRITICAL: Prevents Docker RAM crashes
+    #extra_args=[
+        #"--disable-dev-shm-usage", # CRITICAL: Prevents Docker RAM crashes
         #"--no-sandbox",
         #"--disable-gpu",
         # "--disable-web-security", # REMOVED: Triggered B.TECH WAF
         # "--blink-settings=imagesEnabled=false", # REMOVED: Triggered B.TECH WAF
         # NEW: Blackholing heavy trackers and analytics at the OS network level
         #"--host-resolver-rules=MAP *google-analytics.com 127.0.0.1, MAP *googletagmanager.com 127.0.0.1, MAP *facebook.net 127.0.0.1, MAP *criteo.com 127.0.0.1, MAP *hotjar.com 127.0.0.1, MAP *adsystem.com 127.0.0.1"
-    ]
+    #]
 )
 
 @app.route('/scrape_btech9', methods=['POST'])
