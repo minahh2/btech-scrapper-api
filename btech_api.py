@@ -19,10 +19,11 @@ browser_config = BrowserConfig(
     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
     user_agent_mode="random",
     # light_mode=True, # REMOVED: This can sometimes trigger anti-bot systems
+    #text_mode=True,
     extra_args=[
         "--disable-dev-shm-usage", # CRITICAL: Prevents Docker RAM crashes
-        "--no-sandbox",
-        "--disable-gpu",
+        #"--no-sandbox",
+        #"--disable-gpu",
         # "--disable-web-security", # REMOVED: Triggered B.TECH WAF
         # "--blink-settings=imagesEnabled=false", # REMOVED: Triggered B.TECH WAF
         # NEW: Blackholing heavy trackers and analytics at the OS network level
