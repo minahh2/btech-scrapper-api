@@ -306,7 +306,7 @@ def scrape():
         scroll_delay=0.3,
         wait_for="css:#extracted_offers_json",
         simulate_user=True,
-        page_timeout=180000,
+        page_timeout=60000,
         
         # --- NEW: Structural Blacklisting ---
         exclude_external_links=True, # Prevents Playwright from parsing outbound links
