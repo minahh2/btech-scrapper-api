@@ -15,8 +15,8 @@ app = Flask(__name__)
 browser_config = BrowserConfig(
     viewport_width=1920,
     viewport_height=1080,
-    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-    user_agent_mode="random",
+    #user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    #user_agent_mode="random",
     extra_args=[
         "--disable-dev-shm-usage", # CRITICAL: Prevents Docker RAM crashes
         "--no-sandbox", 
