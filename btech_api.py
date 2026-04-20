@@ -314,6 +314,7 @@ def scrape():
         scroll_delay=0.3,
         wait_for="css:#extracted_offers_json",
         simulate_user=True,
+        magic=True,
         page_timeout=30000,      # <--- Give up and close browser after 30 seconds
         wait_for_timeout=30000   # <--- Match wait condition timeout to 30 seconds
     )
