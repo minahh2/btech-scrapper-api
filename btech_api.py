@@ -11,7 +11,7 @@ from crawl4ai import (
 
 app = Flask(__name__)
 
-# YOUR ORIGINAL CONFIG (Clean, no extra args)
+# 1. EXACTLY YOUR ORIGINAL BROWSER CONFIG (No extra arguments at all)
 browser_config = BrowserConfig(
     viewport_width=1920,
     viewport_height=1080,
@@ -34,9 +34,18 @@ def scrape():
 
     extraction_strategy = JsonCssExtractionStrategy(schema, verbose=True)
     
-    # YOUR EXACT ORIGINAL JS CODE (100% UNTOUCHED)
+    # YOUR EXACT JS CODE + NATIVE SCROLLING TO TRIGGER LAZY LOAD
     js_code = """
     (async () => {
+        const delay = ms => new Promise(res => setTimeout(res, ms));
+        
+        // --- THE FIX: We scroll natively in JS to trigger B.TECH lazy-loading ---
+        // This safely replaces the buggy Crawl4AI 0.8.6 scan_full_page logic
+        console.log("Scrolling to trigger lazy load...");
+        window.scrollBy(0, 1000); await delay(500);
+        window.scrollBy(0, 1000); await delay(500);
+        // ------------------------------------------------------------------------
+
         const uniqueOffers = [];
         try {
         const bodyText = document.body.innerText || "";
@@ -52,7 +61,6 @@ def scrape():
         }
         
         console.log("Strict Check: Multi-offer text found. Enforcing Strict Wait Mode.");
-        const delay = ms => new Promise(res => setTimeout(res, ms));
         console.log("Locating 'Compare the best offers' button...");
         
         let targetButton = null;
@@ -263,23 +271,23 @@ def scrape():
     })();
     """
 
-    # THE BRILLIANT FIX: JS-based wait condition
+    # 2. YOUR EXACT SETTINGS (With your JS Wait Suggestion)
     config = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         extraction_strategy=extraction_strategy,
         js_code=js_code,
-        scan_full_page=True,
-        scroll_delay=0.3,
+        
+        # We turn off Crawl4AI's buggy infinite scroll to prevent the 67s timeout
+        scan_full_page=False, 
+        
         simulate_user=True,
         
-        # Uses Playwright's native JS evaluator. It pauses Python exactly until the div exists in the DOM.
+        # YOUR SUGGESTION: The JS Evaluator. This will trigger the instant the div exists.
         wait_for="js:() => document.getElementById('extracted_offers_json') !== null",
-        # Performance Targeting & Exclusions
-        excluded_tags=['nav', 'footer', 'header', 'script', 'style', 'noscript'],
-        exclude_external_links=True,
-        exclude_social_media_links=True,
-        exclude_external_images=True,
-        page_timeout=60000 
+        
+        # Back to your standard fast timeouts
+        page_timeout=30000,
+        wait_for_timeout=30000
     )
 
     async def run_scraper():
@@ -305,7 +313,6 @@ def scrape():
                     })
             return output
 
-    # MEMORY SAFE ASYNC EXECUTION
     try:
         result = asyncio.run(run_scraper())
         return jsonify(result)
