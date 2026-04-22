@@ -11,13 +11,12 @@ from crawl4ai import (
 
 app = Flask(__name__)
 
-# 1. STRICTLY YOUR ORIGINAL CONFIG: No extra_args to avoid Cloudflare WAF blocks
+# YOUR ORIGINAL CONFIG (Clean, no extra args)
 browser_config = BrowserConfig(
     viewport_width=1920,
     viewport_height=1080,
     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
     user_agent_mode="random"
-    # extra_args completely removed to ensure Cloudflare sees a normal, sandboxed browser
 )
 
 @app.route('/scrape_btech9', methods=['POST'])
@@ -35,7 +34,7 @@ def scrape():
 
     extraction_strategy = JsonCssExtractionStrategy(schema, verbose=True)
     
-    # YOUR ORIGINAL JS CODE + SHORTENED LOOPS FOR FAST FAILS
+    # YOUR EXACT ORIGINAL JS CODE (100% UNTOUCHED)
     js_code = """
     (async () => {
         const uniqueOffers = [];
@@ -121,8 +120,7 @@ def scrape():
         let waitCountAttempts = 0;
         let countSpan = null;
         
-        // ---> FIX 1: Reduced to 30 attempts (3 seconds max) to prevent Time Dilation timeout
-        while (!countSpan && waitCountAttempts < 30) { 
+        while (!countSpan && waitCountAttempts < 100) { 
              countSpan = document.querySelector(countSelector);
              if (!countSpan) {
                  const fallback = Array.from(document.querySelectorAll('span')).find(s => s.textContent.includes('sellers'));
@@ -154,8 +152,7 @@ def scrape():
         let attempts = 0;
         let stableMatches = 0;
         
-        // ---> FIX 2: Reduced to 50 attempts (5 seconds max) to prevent Time Dilation timeout
-        while (attempts < 50) { 
+        while (attempts < 150) { 
              const tempOffers = [];
              let rejectedCount = 0;
              
@@ -222,7 +219,7 @@ def scrape():
                  }
              });
              
-             if (expectedCount > 1 && cleanOffers.length === 1 && attempts === 25 && el) {
+             if (expectedCount > 1 && cleanOffers.length === 1 && attempts === 50 && el) {
                  el.scrollIntoView({behavior: "smooth", block: "center"});
                  el.click();
              }
@@ -258,8 +255,6 @@ def scrape():
         } catch (error) {
             console.error("Error in JS execution:", error);
         } finally {
-            // Because the loops above are shorter, this finally block WILL execute
-            // before Python cuts the cord, injecting the div and returning a clean response.
             const resultDiv = document.createElement('div');
             resultDiv.id = 'extracted_offers_json';
             resultDiv.textContent = JSON.stringify(uniqueOffers || []);
@@ -268,17 +263,23 @@ def scrape():
     })();
     """
 
-    # 60s timeout for Python to give the VPS CPU enough breathing room
+    # THE BRILLIANT FIX: JS-based wait condition
     config = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         extraction_strategy=extraction_strategy,
         js_code=js_code,
         scan_full_page=True,
         scroll_delay=0.3,
-        wait_for="css:#extracted_offers_json",
         simulate_user=True,
-        page_timeout=60000,      
-        wait_for_timeout=60000 
+        
+        # Uses Playwright's native JS evaluator. It pauses Python exactly until the div exists in the DOM.
+        wait_for="js:() => document.getElementById('extracted_offers_json') !== null",
+        # Performance Targeting & Exclusions
+        excluded_tags=['nav', 'footer', 'header', 'script', 'style', 'noscript'],
+        exclude_external_links=True,
+        exclude_social_media_links=True,
+        exclude_external_images=True,
+        page_timeout=60000 
     )
 
     async def run_scraper():
@@ -297,7 +298,6 @@ def scrape():
                         "data": extracted
                     })
                 else:
-                    # If Crawl4AI fails gracefully, it appends the error here so n8n gets a 200 response with error details
                     output.append({
                         "url": result.url,
                         "status": result.status_code,
@@ -310,8 +310,7 @@ def scrape():
         result = asyncio.run(run_scraper())
         return jsonify(result)
     except Exception as e:
-        # If the entire scraper crashes, this guarantees n8n receives an HTTP response instead of hanging
-        return jsonify({"error": f"Internal Scraper Error: {str(e)}", "status": "failed"}), 500
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     from waitress import serve
