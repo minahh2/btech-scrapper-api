@@ -11,7 +11,7 @@ from crawl4ai import (
 
 app = Flask(__name__)
 
-# 1. EXACTLY YOUR ORIGINAL BROWSER CONFIG (No extra arguments at all)
+# 1. EXACTLY YOUR ORIGINAL CONFIG (Clean, no extra args)
 browser_config = BrowserConfig(
     viewport_width=1920,
     viewport_height=1080,
@@ -34,260 +34,260 @@ def scrape():
 
     extraction_strategy = JsonCssExtractionStrategy(schema, verbose=True)
     
-    # YOUR EXACT JS CODE + NATIVE SCROLLING TO TRIGGER LAZY LOAD
-    js_code = """
-    (async () => {
-        const delay = ms => new Promise(res => setTimeout(res, ms));
+    # THE TROJAN HORSE: We put your entire logic inside the wait_for evaluator
+    wait_condition_js = """js:() => {
+        // 1. If the div exists, we are done! Unblock Python instantly.
+        if (document.getElementById('extracted_offers_json')) return true;
         
-        // --- THE FIX: We scroll natively in JS to trigger B.TECH lazy-loading ---
-        // This safely replaces the buggy Crawl4AI 0.8.6 scan_full_page logic
-        console.log("Scrolling to trigger lazy load...");
-        window.scrollBy(0, 1000); await delay(500);
-        window.scrollBy(0, 1000); await delay(500);
-        // ------------------------------------------------------------------------
-
-        const uniqueOffers = [];
-        try {
-        const bodyText = document.body.innerText || "";
-        const HAS_OTHER_OFFERS = bodyText.includes("Offers starting from") || bodyText.includes("Compare the best offers");
+        // 2. If we already launched the script, don't launch it again, just wait.
+        if (window._isScrapingOffers) return false;
+        window._isScrapingOffers = true;
         
-        if (!HAS_OTHER_OFFERS) {
-             console.log("Stict Check: No 'Offers starting from' text found. Assuming Single Offer Page.");
-             const resultDiv = document.createElement('div');
-             resultDiv.id = 'extracted_offers_json';
-             resultDiv.textContent = JSON.stringify([]);
-             document.body.appendChild(resultDiv);
-             return; 
-        }
-        
-        console.log("Strict Check: Multi-offer text found. Enforcing Strict Wait Mode.");
-        console.log("Locating 'Compare the best offers' button...");
-        
-        let targetButton = null;
-        const allElements = Array.from(document.querySelectorAll('*'));
-         
-        for (let i = allElements.length - 1; i >= 0; i--) {
-            const el = allElements[i];
-            if (el.textContent && el.textContent.includes("Compare the best offers from other sellers") && el.children.length === 0) {
-                 let parent = el.parentElement;
-                 while (parent && parent !== document.body) {
-                     if (parent.tagName === 'BUTTON' || parent.getAttribute('role') === 'button' || parent.classList.contains('cursor-pointer') || (parent.tagName === 'DIV' && parent.className.includes('flex'))) {
-                         targetButton = parent;
-                         break;
-                     }
-                     parent = parent.parentElement;
-                 }
-                 if (targetButton) break;
-            }
-        }
-        
-        let el = null;
-        if (targetButton) {
-             console.log("Found target button via text content.");
-             el = targetButton;
-        } else {
-             const candidates = Array.from(document.querySelectorAll('button, div[role="button"], .flex.justify-between'));
-             const specificButtons = candidates.filter(el => {
-                  const txt = el.textContent || "";
-                  return txt.includes("Compare the best offers");
-             });
-             
-             if (specificButtons.length > 0) {
-                 el = specificButtons[specificButtons.length - 1];
-                 console.log("Found target button via candidate filter.");
-             } else {
-                  console.log("Specific 'Compare the best offers' button NOT found. Assuming 1-Offer Page.");
-                  el = null; 
-             }
-        }
-
-        if (el) {
-            console.log("Scrolling to element...");
-            el.scrollIntoView({behavior: "smooth", block: "center"});
-            await delay(2000); 
-            console.log("Clicking element...");
-            el.click();
-            await delay(500);
-        } else {
-            console.log("No clickable element found for sidebar.");
-        }
-        
-        if (el) {
-            el.scrollIntoView({behavior: "smooth", block: "center"});
-            await delay(1000);
-            el.click();
-        } else {
-            console.error("Critical: Could not find ANY 'Other offers' button to click.");
-        }
-        
-        console.log("Waiting for sidebar content...");
-        let expectedCount = 2; 
-        let countTextForOutput = null; 
-        const countSelector = "div.px-small.pt-small.flex.justify-between.items-center span.text-xsmall.font-medium.text-secondarySupportiveD3";
-        
-        let waitCountAttempts = 0;
-        let countSpan = null;
-        
-        while (!countSpan && waitCountAttempts < 100) { 
-             countSpan = document.querySelector(countSelector);
-             if (!countSpan) {
-                 const fallback = Array.from(document.querySelectorAll('span')).find(s => s.textContent.includes('sellers'));
-                 if (fallback) countSpan = fallback;
-             }
-             if (countSpan) break;
-             await delay(100);
-             waitCountAttempts++;
-        }
-        
-        if (countSpan) {
-            console.log("DEBUG: Count Span found: ", countSpan.textContent);
-            countTextForOutput = countSpan.textContent.trim();
-            const match = countSpan.textContent.match(/(\d+)/);
-            if (match) {
-                expectedCount = parseInt(match[1]);
-                console.log(`Expecting exactly ${expectedCount} sellers based on selector.`);
-            }
-        }
-        
-        if (countTextForOutput) {
-            const countDiv = document.createElement('div');
-            countDiv.id = 'debug_offer_count';
-            countDiv.textContent = countTextForOutput;
-            countDiv.style.display = 'none';
-            document.body.appendChild(countDiv);
-        }
-
-        let attempts = 0;
-        let stableMatches = 0;
-        
-        while (attempts < 150) { 
-             const tempOffers = [];
-             let rejectedCount = 0;
-             
-             const sellerPars = Array.from(document.querySelectorAll('p')).filter(p => p.textContent.includes('Sold by'));
-             sellerPars.forEach(sellerP => {
-                let container = sellerP.parentElement;
-                let priceEl = null;
-                let warrantyEl = null;
+        // 3. Launch YOUR EXACT ORIGINAL JS CODE in the background
+        (async () => {
+            const uniqueOffers = [];
+            try {
+                const bodyText = document.body.innerText || "";
+                const HAS_OTHER_OFFERS = bodyText.includes("Offers starting from") || bodyText.includes("Compare the best offers");
                 
-                for (let i = 0; i < 5; i++) {
-                    if (!container) break;
-                    const spans = Array.from(container.querySelectorAll('span'));
-                    
-                    const foundPrice = spans.find(s => {
-                        const txt = s.textContent.trim();
-                        return /^\s*[\d,.]+\s*$/.test(txt) && !txt.includes('EGP');
-                    });
-                    
-                    if (foundPrice && container.textContent.includes('EGP')) {
-                        priceEl = foundPrice;
-                        warrantyEl = Array.from(container.querySelectorAll('p')).find(p => p.textContent.includes('Warranty'));
-                        break;
-                    }
-                    container = container.parentElement;
+                if (!HAS_OTHER_OFFERS) {
+                     console.log("Stict Check: No 'Offers starting from' text found. Assuming Single Offer Page.");
+                     const resultDiv = document.createElement('div');
+                     resultDiv.id = 'extracted_offers_json';
+                     resultDiv.textContent = JSON.stringify([]);
+                     document.body.appendChild(resultDiv);
+                     return; 
                 }
                 
-                if (priceEl) {
-                    let warrantyText = "";
-                    if (warrantyEl) {
-                        const wTxt = warrantyEl.textContent.trim();
-                        if (wTxt.toLowerCase() === "warranty" || wTxt.toLowerCase() === "warranty:") {
-                            if (warrantyEl.nextElementSibling) {
-                                warrantyText = warrantyEl.nextElementSibling.textContent.trim();
-                            }
-                        } else if (wTxt.includes("Warranty:")) {
-                            warrantyText = wTxt.replace("Warranty:", "").trim();
-                        } else {
-                             warrantyText = wTxt; 
-                        }
-                    }
-                    
-                    const sName = sellerP.textContent.trim().replace('Sold by', '').trim();
-                    const pText = priceEl.textContent.trim();
-                    
-                    if (sName.length > 0 && pText.length > 0) {
-                         tempOffers.push({
-                            price: pText,
-                            seller_name: sName,
-                            warranty: warrantyText
-                        });
-                    } else {
-                        rejectedCount++;
+                console.log("Strict Check: Multi-offer text found. Enforcing Strict Wait Mode.");
+                const delay = ms => new Promise(res => setTimeout(res, ms));
+                console.log("Locating 'Compare the best offers' button...");
+                
+                let targetButton = null;
+                const allElements = Array.from(document.querySelectorAll('*'));
+                 
+                for (let i = allElements.length - 1; i >= 0; i--) {
+                    const el = allElements[i];
+                    if (el.textContent && el.textContent.includes("Compare the best offers from other sellers") && el.children.length === 0) {
+                         let parent = el.parentElement;
+                         while (parent && parent !== document.body) {
+                             if (parent.tagName === 'BUTTON' || parent.getAttribute('role') === 'button' || parent.classList.contains('cursor-pointer') || (parent.tagName === 'DIV' && parent.className.includes('flex'))) {
+                                 targetButton = parent;
+                                 break;
+                             }
+                             parent = parent.parentElement;
+                         }
+                         if (targetButton) break;
                     }
                 }
-             });
-
-             const seen = new Set();
-             const cleanOffers = [];
-             tempOffers.forEach(o => {
-                 const key = o.seller_name + o.price;
-                 if (!seen.has(key)) {
-                     seen.add(key);
-                     cleanOffers.push(o);
-                 }
-             });
-             
-             if (expectedCount > 1 && cleanOffers.length === 1 && attempts === 50 && el) {
-                 el.scrollIntoView({behavior: "smooth", block: "center"});
-                 el.click();
-             }
-             
-             const totalProcessed = cleanOffers.length + rejectedCount;
-             
-             if (totalProcessed >= expectedCount) {
-                 if (cleanOffers.length > 0 || rejectedCount > 0) {
-                     if (totalProcessed === expectedCount && expectedCount === 1) {
-                          stableMatches++;
-                          if (stableMatches > 5) {
-                               uniqueOffers.push(...cleanOffers);
-                               break;
-                          }
+                
+                let el = null;
+                if (targetButton) {
+                     console.log("Found target button via text content.");
+                     el = targetButton;
+                } else {
+                     const candidates = Array.from(document.querySelectorAll('button, div[role="button"], .flex.justify-between'));
+                     const specificButtons = candidates.filter(el => {
+                          const txt = el.textContent || "";
+                          return txt.includes("Compare the best offers");
+                     });
+                     
+                     if (specificButtons.length > 0) {
+                         el = specificButtons[specificButtons.length - 1];
+                         console.log("Found target button via candidate filter.");
                      } else {
-                         uniqueOffers.push(...cleanOffers); 
-                         break;
+                          console.log("Specific 'Compare the best offers' button NOT found. Assuming 1-Offer Page.");
+                          el = null; 
                      }
-                 }
-             } else {
-                 stableMatches = 0;
-             }
-             
-             if (cleanOffers.length > expectedCount) { 
-                  uniqueOffers.push(...cleanOffers); 
-                  break;
-             }
-             
-             await delay(100);
-             attempts++;
-        }
-        
-        } catch (error) {
-            console.error("Error in JS execution:", error);
-        } finally {
-            const resultDiv = document.createElement('div');
-            resultDiv.id = 'extracted_offers_json';
-            resultDiv.textContent = JSON.stringify(uniqueOffers || []);
-            document.body.appendChild(resultDiv);
-        }
-    })();
-    """
+                }
 
-    # 2. YOUR EXACT SETTINGS (With your JS Wait Suggestion)
+                if (el) {
+                    console.log("Scrolling to element...");
+                    el.scrollIntoView({behavior: "smooth", block: "center"});
+                    await delay(2000); 
+                    console.log("Clicking element...");
+                    el.click();
+                    await delay(500);
+                } else {
+                    console.log("No clickable element found for sidebar.");
+                }
+                
+                if (el) {
+                    el.scrollIntoView({behavior: "smooth", block: "center"});
+                    await delay(1000);
+                    el.click();
+                } else {
+                    console.error("Critical: Could not find ANY 'Other offers' button to click.");
+                }
+                
+                console.log("Waiting for sidebar content...");
+                let expectedCount = 2; 
+                let countTextForOutput = null; 
+                const countSelector = "div.px-small.pt-small.flex.justify-between.items-center span.text-xsmall.font-medium.text-secondarySupportiveD3";
+                
+                let waitCountAttempts = 0;
+                let countSpan = null;
+                
+                while (!countSpan && waitCountAttempts < 100) { 
+                     countSpan = document.querySelector(countSelector);
+                     if (!countSpan) {
+                         const fallback = Array.from(document.querySelectorAll('span')).find(s => s.textContent.includes('sellers'));
+                         if (fallback) countSpan = fallback;
+                     }
+                     if (countSpan) break;
+                     await delay(100);
+                     waitCountAttempts++;
+                }
+                
+                if (countSpan) {
+                    console.log("DEBUG: Count Span found: ", countSpan.textContent);
+                    countTextForOutput = countSpan.textContent.trim();
+                    const match = countSpan.textContent.match(/(\d+)/);
+                    if (match) {
+                        expectedCount = parseInt(match[1]);
+                        console.log(`Expecting exactly ${expectedCount} sellers based on selector.`);
+                    }
+                }
+                
+                if (countTextForOutput) {
+                    const countDiv = document.createElement('div');
+                    countDiv.id = 'debug_offer_count';
+                    countDiv.textContent = countTextForOutput;
+                    countDiv.style.display = 'none';
+                    document.body.appendChild(countDiv);
+                }
+
+                let attempts = 0;
+                let stableMatches = 0;
+                
+                while (attempts < 150) { 
+                     const tempOffers = [];
+                     let rejectedCount = 0;
+                     
+                     const sellerPars = Array.from(document.querySelectorAll('p')).filter(p => p.textContent.includes('Sold by'));
+                     sellerPars.forEach(sellerP => {
+                        let container = sellerP.parentElement;
+                        let priceEl = null;
+                        let warrantyEl = null;
+                        
+                        for (let i = 0; i < 5; i++) {
+                            if (!container) break;
+                            const spans = Array.from(container.querySelectorAll('span'));
+                            
+                            const foundPrice = spans.find(s => {
+                                const txt = s.textContent.trim();
+                                return /^\s*[\d,.]+\s*$/.test(txt) && !txt.includes('EGP');
+                            });
+                            
+                            if (foundPrice && container.textContent.includes('EGP')) {
+                                priceEl = foundPrice;
+                                warrantyEl = Array.from(container.querySelectorAll('p')).find(p => p.textContent.includes('Warranty'));
+                                break;
+                            }
+                            container = container.parentElement;
+                        }
+                        
+                        if (priceEl) {
+                            let warrantyText = "";
+                            if (warrantyEl) {
+                                const wTxt = warrantyEl.textContent.trim();
+                                if (wTxt.toLowerCase() === "warranty" || wTxt.toLowerCase() === "warranty:") {
+                                    if (warrantyEl.nextElementSibling) {
+                                        warrantyText = warrantyEl.nextElementSibling.textContent.trim();
+                                    }
+                                } else if (wTxt.includes("Warranty:")) {
+                                    warrantyText = wTxt.replace("Warranty:", "").trim();
+                                } else {
+                                     warrantyText = wTxt; 
+                                }
+                            }
+                            
+                            const sName = sellerP.textContent.trim().replace('Sold by', '').trim();
+                            const pText = priceEl.textContent.trim();
+                            
+                            if (sName.length > 0 && pText.length > 0) {
+                                 tempOffers.push({
+                                    price: pText,
+                                    seller_name: sName,
+                                    warranty: warrantyText
+                                });
+                            } else {
+                                rejectedCount++;
+                            }
+                        }
+                     });
+
+                     const seen = new Set();
+                     const cleanOffers = [];
+                     tempOffers.forEach(o => {
+                         const key = o.seller_name + o.price;
+                         if (!seen.has(key)) {
+                             seen.add(key);
+                             cleanOffers.push(o);
+                         }
+                     });
+                     
+                     if (expectedCount > 1 && cleanOffers.length === 1 && attempts === 50 && el) {
+                         el.scrollIntoView({behavior: "smooth", block: "center"});
+                         el.click();
+                     }
+                     
+                     const totalProcessed = cleanOffers.length + rejectedCount;
+                     
+                     if (totalProcessed >= expectedCount) {
+                         if (cleanOffers.length > 0 || rejectedCount > 0) {
+                             if (totalProcessed === expectedCount && expectedCount === 1) {
+                                  stableMatches++;
+                                  if (stableMatches > 5) {
+                                       uniqueOffers.push(...cleanOffers);
+                                       break;
+                                  }
+                             } else {
+                                 uniqueOffers.push(...cleanOffers); 
+                                 break;
+                             }
+                         }
+                     } else {
+                         stableMatches = 0;
+                     }
+                     
+                     if (cleanOffers.length > expectedCount) { 
+                          uniqueOffers.push(...cleanOffers); 
+                          break;
+                     }
+                     
+                     await delay(100);
+                     attempts++;
+                }
+                
+            } catch (error) {
+                console.error("Error in JS execution:", error);
+            } finally {
+                // The moment this injects, Playwright will detect it and unblock Python!
+                const resultDiv = document.createElement('div');
+                resultDiv.id = 'extracted_offers_json';
+                resultDiv.textContent = JSON.stringify(uniqueOffers || []);
+                document.body.appendChild(resultDiv);
+            }
+        })();
+        
+        return false; // Tell Playwright to keep polling until the div exists
+    }"""
+
+    # 2. YOUR EXACT RUN CONFIGURATION
     config = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         extraction_strategy=extraction_strategy,
-        js_code=js_code,
         
-        # We turn off Crawl4AI's buggy infinite scroll to prevent the 67s timeout
-        scan_full_page=False, 
+        # We removed js_code parameter entirely! The script is now safely running inside wait_for.
         
+        scan_full_page=True,      # RESTORED: Exactly as you demanded for B.TECH lazy loading
+        scroll_delay=0.3,
         simulate_user=True,
         
-        # YOUR SUGGESTION: The JS Evaluator. This will trigger the instant the div exists.
-        wait_for="js:() => document.getElementById('extracted_offers_json') !== null",
+        wait_for=wait_condition_js, # The Trojan Horse
         
-        # Back to your standard fast timeouts
-        page_timeout=30000,
-        wait_for_timeout=30000
+        page_timeout=60000        # Safety net, but your JS will unblock it in 8-12s
     )
 
     async def run_scraper():
@@ -313,6 +313,7 @@ def scrape():
                     })
             return output
 
+    # 3. MEMORY SAFE ASYNC EXECUTION
     try:
         result = asyncio.run(run_scraper())
         return jsonify(result)
