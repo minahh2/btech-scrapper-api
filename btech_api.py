@@ -17,12 +17,9 @@ browser_config = BrowserConfig(
     viewport_height=1080,
     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
     user_agent_mode="random",
-    extra_args=[
-        "--disable-dev-shm-usage", # CRITICAL: Prevents Docker RAM crashes
-        #"--no-sandbox", 
-        "--disable-gpu", 
-        "--disable-extensions"
-    ]
+    #text_mode=True,
+    #light_mode=True,
+    #extra_args=["--no-sandbox", "--disable-gpu", "--disable-extensions"]
 )
 
 @app.route('/scrape_btech9', methods=['POST'])
@@ -41,32 +38,41 @@ def scrape():
     extraction_strategy = JsonCssExtractionStrategy(schema, verbose=True)
     
     # YOUR EXACT ORIGINAL JS CODE
-    js_code = """
+   js_code = """
     (async () => {
         const uniqueOffers = [];
         try {
+        // 0. STRICT CHECK & FAST EXIT (Performance)
         const bodyText = document.body.innerText || "";
         const HAS_OTHER_OFFERS = bodyText.includes("Offers starting from") || bodyText.includes("Compare the best offers");
         
         if (!HAS_OTHER_OFFERS) {
              console.log("Stict Check: No 'Offers starting from' text found. Assuming Single Offer Page.");
+             // FAST EXIT: Return empty array immediately.
              const resultDiv = document.createElement('div');
              resultDiv.id = 'extracted_offers_json';
              resultDiv.textContent = JSON.stringify([]);
              document.body.appendChild(resultDiv);
-             return; 
+             return; // EXIT SCRIPT
         }
         
         console.log("Strict Check: Multi-offer text found. Enforcing Strict Wait Mode.");
+        
+        // Helper to wait
         const delay = ms => new Promise(res => setTimeout(res, ms));
+        
+        // 1. Click "Other Offers"
         console.log("Locating 'Compare the best offers' button...");
         
+        // Target Logic: Find text node -> traverse to button
         let targetButton = null;
         const allElements = Array.from(document.querySelectorAll('*'));
          
+        // Iterate backwards (bottom-up) to find the last occurrence
         for (let i = allElements.length - 1; i >= 0; i--) {
             const el = allElements[i];
             if (el.textContent && el.textContent.includes("Compare the best offers from other sellers") && el.children.length === 0) {
+                 // Found the text node (or leaf element). Traverse up to find button.
                  let parent = el.parentElement;
                  while (parent && parent !== document.body) {
                      if (parent.tagName === 'BUTTON' || parent.getAttribute('role') === 'button' || parent.classList.contains('cursor-pointer') || (parent.tagName === 'DIV' && parent.className.includes('flex'))) {
@@ -79,11 +85,13 @@ def scrape():
             }
         }
         
+        // Fallback or assignment
         let el = null;
         if (targetButton) {
              console.log("Found target button via text content.");
              el = targetButton;
         } else {
+             // Fallback: Use the specific text search on buttons directly
              const candidates = Array.from(document.querySelectorAll('button, div[role="button"], .flex.justify-between'));
              const specificButtons = candidates.filter(el => {
                   const txt = el.textContent || "";
@@ -103,6 +111,7 @@ def scrape():
             console.log("Scrolling to element...");
             el.scrollIntoView({behavior: "smooth", block: "center"});
             await delay(2000); 
+            
             console.log("Clicking element...");
             el.click();
             await delay(500);
@@ -118,15 +127,18 @@ def scrape():
             console.error("Critical: Could not find ANY 'Other offers' button to click.");
         }
         
+        // 4. Wait for sidebar (Strict Count Wait)
         console.log("Waiting for sidebar content...");
-        let expectedCount = 2; 
+        
+        let expectedCount = 2; // Default to 2 since we PASSED strict check
         let countTextForOutput = null; 
         const countSelector = "div.px-small.pt-small.flex.justify-between.items-center span.text-xsmall.font-medium.text-secondarySupportiveD3";
         
+        // STRICT WAIT for Count Element
         let waitCountAttempts = 0;
         let countSpan = null;
         
-        while (!countSpan && waitCountAttempts < 100) { 
+        while (!countSpan && waitCountAttempts < 100) { // Wait up to 10s for sidebar to populate
              countSpan = document.querySelector(countSelector);
              if (!countSpan) {
                  const fallback = Array.from(document.querySelectorAll('span')).find(s => s.textContent.includes('sellers'));
@@ -145,20 +157,25 @@ def scrape():
                 expectedCount = parseInt(match[1]);
                 console.log(`Expecting exactly ${expectedCount} sellers based on selector.`);
             }
+        } else {
+             console.log("WARN: Could not find specific 'sellers' count element after 10s. Defaulting to expected=2 (Strict Mode).");
         }
         
+        // Inject count text into DOM for schema extraction
         if (countTextForOutput) {
             const countDiv = document.createElement('div');
             countDiv.id = 'debug_offer_count';
             countDiv.textContent = countTextForOutput;
             countDiv.style.display = 'none';
             document.body.appendChild(countDiv);
+            console.log("Injected #debug_offer_count: " + countTextForOutput);
         }
 
         let attempts = 0;
         let stableMatches = 0;
         
-        while (attempts < 150) { 
+        while (attempts < 150) { // Wait up to 15s max (polling)
+             // 5. Extract offers (Verified Logic)
              const tempOffers = [];
              let rejectedCount = 0;
              
@@ -196,13 +213,14 @@ def scrape():
                         } else if (wTxt.includes("Warranty:")) {
                             warrantyText = wTxt.replace("Warranty:", "").trim();
                         } else {
-                             warrantyText = wTxt; 
+                             warrantyText = wTxt; // Fallback
                         }
                     }
                     
                     const sName = sellerP.textContent.trim().replace('Sold by', '').trim();
                     const pText = priceEl.textContent.trim();
                     
+                    // FINAL VALIDATION
                     if (sName.length > 0 && pText.length > 0) {
                          tempOffers.push({
                             price: pText,
@@ -211,10 +229,15 @@ def scrape():
                         });
                     } else {
                         rejectedCount++;
+                        // console.log(`Rejected offer: Price='${pText}', Seller='${sName}'`);
                     }
+                } else {
+                     // Log if price not found valid
+                     // console.log("No valid price found for checking container.");
                 }
              });
 
+             // Deduplicate
              const seen = new Set();
              const cleanOffers = [];
              tempOffers.forEach(o => {
@@ -225,22 +248,32 @@ def scrape():
                  }
              });
              
+             // RETRY CLICK LOGIC (Stability Fix)
+             // If we expect > 1 offer, but stuck at 1 for > 5 seconds (50 attempts), try clicking again.
              if (expectedCount > 1 && cleanOffers.length === 1 && attempts === 50 && el) {
+                 console.log("WARN: Stuck at 1 offer after 5s. Sidebar might not have opened. Retrying click...");
                  el.scrollIntoView({behavior: "smooth", block: "center"});
                  el.click();
              }
              
+             // VALIDATE COUNT (SMART ACCOUNTING)
              const totalProcessed = cleanOffers.length + rejectedCount;
              
+             // Success condition: We have processed enough offers to satisfy expected count
              if (totalProcessed >= expectedCount) {
                  if (cleanOffers.length > 0 || rejectedCount > 0) {
+                     // Check stability if we are exactly at expected
                      if (totalProcessed === expectedCount && expectedCount === 1) {
+                          // Special stability for 1 item (main item usually)
                           stableMatches++;
                           if (stableMatches > 5) {
+                               console.log(`Success! Found ${cleanOffers.length} valid + ${rejectedCount} rejected. Total ${totalProcessed} matches expected.`);
                                uniqueOffers.push(...cleanOffers);
                                break;
                           }
                      } else {
+                         // For >1, we assume success if we hit the number
+                         console.log(`Success! Found ${cleanOffers.length} valid + ${rejectedCount} rejected. Total ${totalProcessed} >= expected ${expectedCount}.`);
                          uniqueOffers.push(...cleanOffers); 
                          break;
                      }
@@ -249,38 +282,58 @@ def scrape():
                  stableMatches = 0;
              }
              
-             if (cleanOffers.length > expectedCount) { 
+             // If we have MORE than expected (possible if sidebar loaded extra stuff or we counted main + sidebar)
+             if (cleanOffers.length > expectedCount) { // Note: kept strict check for clean offers just in case
+                  console.log(`Found MORE valid offers than expected (${cleanOffers.length} > ${expectedCount}). accepting.`);
                   uniqueOffers.push(...cleanOffers); 
                   break;
              }
+             
+             if (attempts % 10 === 0) console.log(`Attempt ${attempts}: Valid=${cleanOffers.length}, Rejected=${rejectedCount}, Expected=${expectedCount}`);
              
              await delay(100);
              attempts++;
         }
         
+        if (uniqueOffers.length === 0 && attempts >= 150) {
+             console.log("Timed out waiting for offer count match.");
+        }
+        
+        console.log(`Extracted ${uniqueOffers.length} offers`);
+        
+        // Inject into DOM
         } catch (error) {
             console.error("Error in JS execution:", error);
         } finally {
+            // ALWAYS Inject into DOM (empty array if offers is undefined or error)
             const resultDiv = document.createElement('div');
             resultDiv.id = 'extracted_offers_json';
+            // ensure uniqueOffers exists from outer scope, or default to []
             resultDiv.textContent = JSON.stringify(uniqueOffers || []);
             document.body.appendChild(resultDiv);
+            console.log("Injected extracted offers into DOM (Final)");
         }
     })();
     """
 
     # 2. REMOVED MAGIC=TRUE (This was causing the Proxy direct failed error)
     config = CrawlerRunConfig(
-        cache_mode=CacheMode.BYPASS,
-        extraction_strategy=extraction_strategy,
-        js_code=js_code,
-        scan_full_page=True,
-        scroll_delay=0.3,
-        wait_for="css:#extracted_offers_json",
-        simulate_user=True,
-        page_timeout=30000,      
-        wait_for_timeout=30000 
-    )
+    cache_mode=CacheMode.BYPASS,
+    extraction_strategy=extraction_strategy,
+    js_code=js_code,
+    scan_full_page=True,
+    scroll_delay=0.3,
+    #magic=True,
+    #delay_before_return_html=2.0,
+    wait_for="css:#extracted_offers_json",
+    # Performance Targeting & Exclusions
+    excluded_tags=['nav', 'footer', 'header', 'script', 'style', 'noscript'],
+    exclude_external_links=True,
+    exclude_social_media_links=True,
+    exclude_external_images=True,
+    simulate_user=True    
+)
+
 
     async def run_scraper():
         async with AsyncWebCrawler(config=browser_config, verbose=True) as crawler:
