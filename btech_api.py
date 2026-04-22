@@ -38,7 +38,7 @@ def scrape():
     extraction_strategy = JsonCssExtractionStrategy(schema, verbose=True)
     
     # YOUR EXACT ORIGINAL JS CODE
-   js_code = """
+    js_code = """
     (async () => {
         const uniqueOffers = [];
         try {
