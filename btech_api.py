@@ -286,7 +286,11 @@ def scrape():
         simulate_user=True,
         
         wait_for=wait_condition_js, # The Trojan Horse
-        
+        # Performance Targeting & Exclusions
+        excluded_tags=['nav', 'footer', 'header', 'script', 'style', 'noscript'],
+        exclude_external_links=True,
+        exclude_social_media_links=True,
+        exclude_external_images=True,
         page_timeout=60000        # Safety net, but your JS will unblock it in 8-12s
     )
 
