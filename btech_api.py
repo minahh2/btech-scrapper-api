@@ -325,7 +325,7 @@ def scrape():
     scroll_delay=0.3,
     #magic=True,
     #delay_before_return_html=2.0,
-    #wait_for="css:#extracted_offers_json",
+    wait_for='[id="extracted_offers_json"]',
     # Performance Targeting & Exclusions
     excluded_tags=['nav', 'footer', 'header', 'script', 'style', 'noscript'],
     exclude_external_links=True,
