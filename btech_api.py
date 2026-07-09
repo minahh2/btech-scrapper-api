@@ -1,3 +1,4 @@
+import json
 import asyncio
 from flask import Flask, request, jsonify
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
@@ -14,7 +15,11 @@ browser_config = BrowserConfig(
 
 @app.route('/scrape_btech', methods=['POST'])
 def scrape():
-    url = request.get_json().get("urls")[0]
+    data = request.get_json()
+    if not data or "urls" not in data:
+        return jsonify({"error": "No URL provided"})
+    
+    url = data.get("urls")[0]
     
     config = CrawlerRunConfig(
         scan_full_page=True,
@@ -25,20 +30,28 @@ def scrape():
         async with AsyncWebCrawler(config=browser_config) as crawler:
             result = await crawler.arun(url=url, config=config)
             
-            # Extract basic diagnostic info
+            # SAFE ATTRIBUTE ACCESS
+            # We check metadata first, then the object directly
+            page_title = "Unknown"
+            if hasattr(result, 'metadata') and result.metadata and 'title' in result.metadata:
+                page_title = result.metadata['title']
+            elif hasattr(result, 'title'):
+                page_title = result.title
+
             return {
                 "url": url,
                 "status_code": result.status_code,
-                "page_title": result.title if result.title else "NO_TITLE_FOUND",
+                "page_title": page_title,
                 "content_length": len(result.markdown) if result.markdown else 0,
-                "html_preview": result.html[:2000] if result.html else "NO_HTML_RETURNED"
+                # This gives us a safe preview of the HTML to debug why "Sold by" was missing
+                "html_preview": result.html[:1500] if result.html else "NO_HTML"
             }
 
     try:
         data = asyncio.run(run_diagnostic())
         return jsonify(data)
     except Exception as e:
-        return jsonify({"error": str(e)})
+        return jsonify({"error": str(e), "trace": "Make sure you check your result object structure"})
 
 if __name__ == '__main__':
     from waitress import serve
