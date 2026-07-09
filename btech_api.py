@@ -34,7 +34,7 @@ def scrape():
 
     extraction_strategy = JsonCssExtractionStrategy(schema, verbose=True)
     
-    # THE TROJAN HORSE: We put your entire logic inside the wait_for evaluator
+    # THE TROJAN HORSE: Patched for the new "bukra" UI, LE currency, and new button text
     wait_condition_js = """js:() => {
         // 1. If the div exists, we are done! Unblock Python instantly.
         if (document.getElementById('extracted_offers_json')) return true;
@@ -48,10 +48,13 @@ def scrape():
             const uniqueOffers = [];
             try {
                 const bodyText = document.body.innerText || "";
-                const HAS_OTHER_OFFERS = bodyText.includes("Offers starting from") || bodyText.includes("Compare the best offers");
+                // NEW: Updated to match the new button text and panel titles
+                const HAS_OTHER_OFFERS = bodyText.includes("Offers starting from") || 
+                                         bodyText.includes("Compare the best offers from other sellers") || 
+                                         bodyText.includes("Select from other sellers");
                 
                 if (!HAS_OTHER_OFFERS) {
-                     console.log("Stict Check: No 'Offers starting from' text found. Assuming Single Offer Page.");
+                     console.log("Strict Check: No 'Offers starting from' text found. Assuming Single Offer Page.");
                      const resultDiv = document.createElement('div');
                      resultDiv.id = 'extracted_offers_json';
                      resultDiv.textContent = JSON.stringify([]);
@@ -61,13 +64,14 @@ def scrape():
                 
                 console.log("Strict Check: Multi-offer text found. Enforcing Strict Wait Mode.");
                 const delay = ms => new Promise(res => setTimeout(res, ms));
-                console.log("Locating 'Compare the best offers' button...");
+                console.log("Locating 'Compare the best offers from other sellers' button...");
                 
                 let targetButton = null;
                 const allElements = Array.from(document.querySelectorAll('*'));
                  
                 for (let i = allElements.length - 1; i >= 0; i--) {
                     const el = allElements[i];
+                    // NEW: Looking for the exact new string
                     if (el.textContent && el.textContent.includes("Compare the best offers from other sellers") && el.children.length === 0) {
                          let parent = el.parentElement;
                          while (parent && parent !== document.body) {
@@ -86,17 +90,17 @@ def scrape():
                      console.log("Found target button via text content.");
                      el = targetButton;
                 } else {
-                     const candidates = Array.from(document.querySelectorAll('button, div[role="button"], .flex.justify-between'));
-                     const specificButtons = candidates.filter(el => {
-                          const txt = el.textContent || "";
-                          return txt.includes("Compare the best offers");
+                     const candidates = Array.from(document.querySelectorAll('button, div[role="button"], .flex.justify-between, .cursor-pointer'));
+                     const specificButtons = candidates.filter(e => {
+                          const txt = e.textContent || "";
+                          return txt.includes("Compare the best offers from other sellers");
                      });
                      
                      if (specificButtons.length > 0) {
                          el = specificButtons[specificButtons.length - 1];
                          console.log("Found target button via candidate filter.");
                      } else {
-                          console.log("Specific 'Compare the best offers' button NOT found. Assuming 1-Offer Page.");
+                          console.log("Specific button NOT found. Assuming 1-Offer Page or already open.");
                           el = null; 
                      }
                 }
@@ -104,36 +108,21 @@ def scrape():
                 if (el) {
                     console.log("Scrolling to element...");
                     el.scrollIntoView({behavior: "smooth", block: "center"});
-                    await delay(2000); 
+                    await delay(1000); 
                     console.log("Clicking element...");
                     el.click();
                     await delay(500);
-                } else {
-                    console.log("No clickable element found for sidebar.");
-                }
-                
-                if (el) {
-                    el.scrollIntoView({behavior: "smooth", block: "center"});
-                    await delay(1000);
-                    el.click();
-                } else {
-                    console.error("Critical: Could not find ANY 'Other offers' button to click.");
                 }
                 
                 console.log("Waiting for sidebar content...");
                 let expectedCount = 2; 
-                let countTextForOutput = null; 
-                const countSelector = "div.px-small.pt-small.flex.justify-between.items-center span.text-xsmall.font-medium.text-secondarySupportiveD3";
-                
                 let waitCountAttempts = 0;
                 let countSpan = null;
                 
+                // NEW: Robust 'Sellers Count' detection for the new Bukra UI (e.g. '5 sellers')
                 while (!countSpan && waitCountAttempts < 100) { 
-                     countSpan = document.querySelector(countSelector);
-                     if (!countSpan) {
-                         const fallback = Array.from(document.querySelectorAll('span')).find(s => s.textContent.includes('sellers'));
-                         if (fallback) countSpan = fallback;
-                     }
+                     const spans = Array.from(document.querySelectorAll('span'));
+                     countSpan = spans.find(s => s.textContent.toLowerCase().includes('sellers') && s.textContent.match(/(\d+)/));
                      if (countSpan) break;
                      await delay(100);
                      waitCountAttempts++;
@@ -141,20 +130,11 @@ def scrape():
                 
                 if (countSpan) {
                     console.log("DEBUG: Count Span found: ", countSpan.textContent);
-                    countTextForOutput = countSpan.textContent.trim();
                     const match = countSpan.textContent.match(/(\d+)/);
                     if (match) {
                         expectedCount = parseInt(match[1]);
                         console.log(`Expecting exactly ${expectedCount} sellers based on selector.`);
                     }
-                }
-                
-                if (countTextForOutput) {
-                    const countDiv = document.createElement('div');
-                    countDiv.id = 'debug_offer_count';
-                    countDiv.textContent = countTextForOutput;
-                    countDiv.style.display = 'none';
-                    document.body.appendChild(countDiv);
                 }
 
                 let attempts = 0;
@@ -164,56 +144,55 @@ def scrape():
                      const tempOffers = [];
                      let rejectedCount = 0;
                      
-                     const sellerPars = Array.from(document.querySelectorAll('p')).filter(p => p.textContent.includes('Sold by'));
+                     // NEW: The seller is now inside nested spans `<p><span>Sold by</span><span>Name</span></p>`
+                     const sellerPars = Array.from(document.querySelectorAll('p, div')).filter(p => p.textContent.includes('Sold by') && p.children.length > 0);
+                     
+                     // Use a set to prevent duplicating reads from nested divs
+                     const processedSellers = new Set();
+
                      sellerPars.forEach(sellerP => {
+                        const sNameRaw = sellerP.textContent.trim().replace('Sold by', '').trim();
+                        if (processedSellers.has(sNameRaw)) return;
+                        processedSellers.add(sNameRaw);
+
                         let container = sellerP.parentElement;
                         let priceEl = null;
-                        let warrantyEl = null;
+                        let warrantyText = "";
                         
-                        for (let i = 0; i < 5; i++) {
+                        for (let i = 0; i < 6; i++) {
                             if (!container) break;
                             const spans = Array.from(container.querySelectorAll('span'));
                             
+                            // NEW: Notice how we check for 'LE' now instead of just 'EGP'
                             const foundPrice = spans.find(s => {
                                 const txt = s.textContent.trim();
-                                return /^\s*[\d,.]+\s*$/.test(txt) && !txt.includes('EGP');
+                                return /^\s*[\d,.]+\s*$/.test(txt) && !txt.includes('EGP') && !txt.includes('LE');
                             });
                             
-                            if (foundPrice && container.textContent.includes('EGP')) {
+                            // If we found the number, check if its container has LE or EGP
+                            if (foundPrice && (container.textContent.includes('EGP') || container.textContent.includes('LE'))) {
                                 priceEl = foundPrice;
-                                warrantyEl = Array.from(container.querySelectorAll('p')).find(p => p.textContent.includes('Warranty'));
+                                
+                                // NEW: Warranty is now an inline span with an SVG image inside
+                                const wEl = spans.find(s => s.textContent.toLowerCase().includes('warranty'));
+                                if (wEl) {
+                                    warrantyText = wEl.textContent.trim();
+                                }
                                 break;
                             }
                             container = container.parentElement;
                         }
                         
-                        if (priceEl) {
-                            let warrantyText = "";
-                            if (warrantyEl) {
-                                const wTxt = warrantyEl.textContent.trim();
-                                if (wTxt.toLowerCase() === "warranty" || wTxt.toLowerCase() === "warranty:") {
-                                    if (warrantyEl.nextElementSibling) {
-                                        warrantyText = warrantyEl.nextElementSibling.textContent.trim();
-                                    }
-                                } else if (wTxt.includes("Warranty:")) {
-                                    warrantyText = wTxt.replace("Warranty:", "").trim();
-                                } else {
-                                     warrantyText = wTxt; 
-                                }
-                            }
-                            
-                            const sName = sellerP.textContent.trim().replace('Sold by', '').trim();
-                            const pText = priceEl.textContent.trim();
-                            
-                            if (sName.length > 0 && pText.length > 0) {
-                                 tempOffers.push({
-                                    price: pText,
-                                    seller_name: sName,
-                                    warranty: warrantyText
-                                });
-                            } else {
-                                rejectedCount++;
-                            }
+                        const pText = priceEl ? priceEl.textContent.trim() : "";
+                        
+                        if (sNameRaw.length > 0 && pText.length > 0) {
+                             tempOffers.push({
+                                price: pText,
+                                seller_name: sNameRaw,
+                                warranty: warrantyText
+                             });
+                        } else {
+                            rejectedCount++;
                         }
                      });
 
@@ -234,18 +213,11 @@ def scrape():
                      
                      const totalProcessed = cleanOffers.length + rejectedCount;
                      
-                     if (totalProcessed >= expectedCount) {
-                         if (cleanOffers.length > 0 || rejectedCount > 0) {
-                             if (totalProcessed === expectedCount && expectedCount === 1) {
-                                  stableMatches++;
-                                  if (stableMatches > 5) {
-                                       uniqueOffers.push(...cleanOffers);
-                                       break;
-                                  }
-                             } else {
-                                 uniqueOffers.push(...cleanOffers); 
-                                 break;
-                             }
+                     if (totalProcessed >= expectedCount && expectedCount > 0) {
+                         stableMatches++;
+                         if (stableMatches > 4) { // Increased stability threshold slightly
+                             uniqueOffers.push(...cleanOffers);
+                             break;
                          }
                      } else {
                          stableMatches = 0;
@@ -286,6 +258,7 @@ def scrape():
         simulate_user=True,
         
         wait_for=wait_condition_js, # The Trojan Horse
+        
         # Performance Targeting & Exclusions
         excluded_tags=['nav', 'footer', 'header', 'script', 'style', 'noscript'],
         exclude_external_links=True,
