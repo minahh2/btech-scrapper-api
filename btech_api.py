@@ -22,8 +22,9 @@ browser_config = BrowserConfig(
     extra_args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"]
 )
 
+# 1. THE MUSCLE: Python handles all clicking to bypass anti-bot
 async def btech_native_click(page, *args, **kwargs):
-    print("⏳ [HOOK] Initializing interactive actions...")
+    print("⏳ [HOOK] Python is hunting for the button...")
     await page.wait_for_timeout(3000) 
     
     selectors = [
@@ -38,41 +39,31 @@ async def btech_native_click(page, *args, **kwargs):
         try:
             btn = page.locator(sel).first
             if await btn.count() > 0 and await btn.is_visible():
-                print(f"🎯 [HOOK] Match found via: {sel}. Triggering OS-level click...")
+                print(f"🎯 [HOOK] Match found. Sending OS-level click...")
                 await btn.scroll_into_view_if_needed()
                 await page.wait_for_timeout(500)
                 await btn.click(force=True)
                 clicked = True
-                print("⚡ [HOOK] Click sequence executed. Holding for animation...")
-                await page.wait_for_timeout(4000)
+                print("⚡ [HOOK] Clicked! Yielding to JavaScript for extraction...")
+                await page.wait_for_timeout(2000) # Give it 2 seconds to start animating
                 break
-        except Exception as e:
+        except Exception:
             pass
             
     if not clicked:
-        print("🔍 [HOOK] Standard click skipped. Deploying window fallback event...")
-        try:
-            await page.evaluate("""() => {
-                const elements = Array.from(document.querySelectorAll('button, div, span, p'));
-                const target = elements.find(e => e.textContent && e.textContent.includes('Compare the best offers'));
-                if (target) { target.click(); return true; }
-                return false;
-            }""")
-            await page.wait_for_timeout(4000)
-        except Exception as e:
-            print(f"❌ [HOOK] Secondary trigger failed: {e}")
+        print("⚠️ [HOOK] Native click failed. Relaying to fallback.")
 
 @app.route('/scrape_btech', methods=['POST'])
 def scrape():
     data = request.get_json()
-    if not data: return jsonify({"error": "No payload payload detected"}), 400
+    if not data: return jsonify({"error": "No payload detected"}), 400
          
     urls = data.get("urls")
     schema = data.get("schema")
 
     extraction_strategy = JsonCssExtractionStrategy(schema, verbose=False)
     
-    # THE TROJAN HORSE: Hard Validation Lock Engine
+    # 2. THE BRAIN: JS ONLY observes the DOM and extracts. NO clicking (unless Python failed).
     wait_condition_js = """js:() => {
         if (document.getElementById('extracted_offers_json')) return true;
         if (window._isScrapingOffers) return false;
@@ -81,6 +72,7 @@ def scrape():
         (async () => {
             const delay = ms => new Promise(res => setTimeout(res, ms));
             const uniqueOffers = [];
+            let debugReason = "TIMEOUT_SIDEBAR_NEVER_OPENED";
             
             try {
                 let attempts = 0;
@@ -88,10 +80,10 @@ def scrape():
                 let stableMatches = 0;
                 let expectedCount = 0; 
                 
-                while (attempts < 120) { // Keep alive up to 18 seconds max
+                while (attempts < 120) { // 18 seconds max timeout
                      const tempOffers = [];
                      
-                     // 1. ISOLATE SIDEBAR PANEL CONTAINER
+                     // Isolate the sidebar
                      const headers = Array.from(document.querySelectorAll('span, h2, h3, h4, p, div')).filter(e => {
                          const t = e.textContent.trim();
                          return t.includes("Select from other sellers") || 
@@ -113,20 +105,27 @@ def scrape():
                          searchArea = parent;
                      }
                      
+                     // HAIL MARY: If Python missed the click, let JS try it once at second 6
+                     if (!searchArea && attempts === 40) {
+                         const btn = Array.from(document.querySelectorAll('button, div, span, p')).find(e => (e.textContent || "").includes("Compare the best offers"));
+                         if (btn) {
+                             btn.scrollIntoView({behavior: "smooth", block: "center"});
+                             btn.click();
+                         }
+                     }
+                     
                      if (searchArea) {
-                         // 2. DYNAMICALLY READ SELLER COUNT FROM HEADER
+                         // Read the target number from the header
                          if (expectedCount === 0) {
                              const potentialElements = Array.from(searchArea.querySelectorAll('span, p, div, h2, h3, h4'));
                              for (let el of potentialElements) {
                                  const txt = el.textContent.trim();
-                                 // Look for patterns like "5 sellers", "All sellers (5)", "Offers (5)"
                                  let match = txt.match(/(\d+)\s*(?:sellers|offers)/i) || txt.match(/(?:sellers|offers)\s*\(?(\d+)\)?/i);
                                  if (!match && (txt.toLowerCase().includes("sellers") || txt.toLowerCase().includes("offers"))) {
                                      match = txt.match(/(\d+)/);
                                  }
                                  if (match) {
                                      expectedCount = parseInt(match[1], 10);
-                                     console.log("🎯 Target lock established! Expecting exactly " + expectedCount + " sellers.");
                                      break;
                                  }
                              }
@@ -185,26 +184,23 @@ def scrape():
                              }
                          });
                          
-                         // 3. HARD VALIDATION LOCK EXIT CONDITION
+                         // DYNAMIC EXIT LOGIC
                          if (cleanOffers.length > 0) {
                              if (expectedCount > 0) {
-                                 // Target lock condition: Loop keeps running until array length matches the header count
                                  if (cleanOffers.length >= expectedCount) {
                                      stableMatches++;
-                                     if (stableMatches >= 2) { // 300ms verification step
+                                     if (stableMatches >= 2) {
                                          uniqueOffers.push(...cleanOffers);
                                          break;
                                      }
                                  } else {
-                                     // Count matches haven't filled up yet, reset stable counter to keep loop running
                                      stableMatches = 0;
                                      previousCount = cleanOffers.length;
                                  }
                              } else {
-                                 // Fallback: If header layout changes completely and we can't extract a raw number
                                  if (cleanOffers.length === previousCount) {
                                      stableMatches++;
-                                     if (stableMatches >= 18) { // Wait for 2.7 seconds of complete text stillness
+                                     if (stableMatches >= 15) { 
                                          uniqueOffers.push(...cleanOffers);
                                          break; 
                                      }
@@ -216,16 +212,28 @@ def scrape():
                          }
                      }
                      
+                     // If we hit loop 119 (timeout), grab the HTML for debugging
+                     if (attempts === 119) {
+                         debugReason = document.body ? document.body.innerHTML.substring(0, 1500) : "BODY_UNAVAILABLE";
+                     }
+                     
                      await delay(150);
                      attempts++;
                 }
                 
             } catch (error) {
                 console.error("Error in JS execution:", error);
+                debugReason = error.toString();
             } finally {
                 const resultDiv = document.createElement('div');
                 resultDiv.id = 'extracted_offers_json';
-                resultDiv.textContent = JSON.stringify(uniqueOffers);
+                
+                if (uniqueOffers.length === 0) {
+                    resultDiv.textContent = JSON.stringify([{ "error": "No offers found", "debug_html": debugReason }]);
+                } else {
+                    resultDiv.textContent = JSON.stringify(uniqueOffers);
+                }
+                
                 document.body.appendChild(resultDiv);
             }
         })();
@@ -260,45 +268,17 @@ def scrape():
                     except:
                         extracted = {}
                     
+                    # Read the JSON that JS injected into the DOM
                     soup = BeautifulSoup(result.html, 'html.parser')
-                    offers = []
+                    json_div = soup.find(id="extracted_offers_json")
                     
-                    for tag in soup.find_all(['span', 'p', 'div', 'td']):
-                        raw_text = tag.get_text(" ", strip=True)
-                        if "Sold by" in raw_text and len(raw_text) < 300:
-                            name_match = re.search(r'Sold\s*by\s*([^0-9\nLE|EGP,$]+)', raw_text, re.IGNORECASE)
-                            seller_name = name_match.group(1).strip() if name_match else raw_text.replace("Sold by", "").strip()
-                            
-                            for delimiter in ["Other sellers", "Compare", "Delivery", "Store"]:
-                                if delimiter in seller_name:
-                                    seller_name = seller_name.split(delimiter)[0].strip()
-                            
-                            price = ""
-                            warranty = ""
-                            tracker = tag
-                            for _ in range(5):
-                                if not tracker: break
-                                lineage_text = tracker.get_text(" ", strip=True)
-                                
-                                if not price:
-                                    price_match = re.search(r'([\d,]+)\s*(?:EGP|LE)', lineage_text)
-                                    if price_match: price = price_match.group(1)
-                                
-                                if not warranty:
-                                    warranty_match = re.search(r'(\d+)\s*(?:month|year)s?\s*warranty', lineage_text, re.IGNORECASE)
-                                    if warranty_match: warranty = warranty_match.group(1) + " months warranty"
-                                
-                                if price and warranty: break
-                                tracker = tracker.parent
-                            
-                            if seller_name and price and len(seller_name) < 60:
-                                offers.append({
-                                    "seller_name": seller_name,
-                                    "price": price,
-                                    "warranty": warranty if warranty else "12 months warranty"
-                                })
-                    
-                    unique_offers = list({ (o['seller_name'].lower(), o['price']): o for o in offers }.values())
+                    if json_div:
+                        try:
+                            unique_offers = json.loads(json_div.text)
+                        except:
+                            unique_offers = [{"error": "JSON Parse Failed"}]
+                    else:
+                        unique_offers = [{"error": "JS Script failed to inject div"}]
                     
                     if isinstance(extracted, list):
                         if len(extracted) > 0:
