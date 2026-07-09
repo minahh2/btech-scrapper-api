@@ -22,13 +22,12 @@ browser_config = BrowserConfig(
     extra_args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"]
 )
 
-# 1. THE NATIVE CLICKER (Bypasses the JS Bot Blocker)
+# 1. THE NATIVE CLICKER (Bypasses React isTrusted blocker)
 async def btech_native_click(page, *args, **kwargs):
     print("⏳ [HOOK] Attempting Native Hardware Click...")
     try:
-        await page.wait_for_timeout(2000) # Let page settle
+        await page.wait_for_timeout(2000)
         
-        # Look for the trigger text
         selectors = [
             'text="Compare the best offers from other sellers"',
             'text="Select from other sellers"'
@@ -41,10 +40,9 @@ async def btech_native_click(page, *args, **kwargs):
                 await btn.scroll_into_view_if_needed()
                 await page.wait_for_timeout(500)
                 
-                # force=True is the magic that bypasses React's isTrusted check
                 await btn.click(force=True)
                 
-                print("⏳ [HOOK] Waiting 4 seconds for sidebar to animate and load data...")
+                print("⏳ [HOOK] Waiting 4 seconds for sidebar to load...")
                 await page.wait_for_timeout(4000)
                 break
     except Exception as e:
@@ -72,8 +70,6 @@ def scrape():
 
     async def run_scraper():
         async with AsyncWebCrawler(config=browser_config, verbose=False) as crawler:
-            
-            # Attach the Native Clicker
             crawler.crawler_strategy.set_hook("after_goto", btech_native_click)
             
             results = await crawler.arun_many(urls=urls, config=config)
@@ -86,22 +82,16 @@ def scrape():
                     except:
                         extracted = {}
                     
-                    # 2. THE PYTHON TEXT EXTRACTOR (Replaces the complex JS)
+                    # 2. PYTHON SURGICAL EXTRACTION
                     soup = BeautifulSoup(result.html, 'html.parser')
-                    
-                    # Find the sidebar by looking for its header
                     sidebar_headers = soup.find_all(string=re.compile("Select from other sellers|Compare the best offers from other sellers"))
                     
                     offers = []
                     if sidebar_headers:
-                        # Go up a few levels to grab the sidebar container
                         sidebar = sidebar_headers[-1].parent.parent.parent.parent
-                        
-                        # Find all "Sold by" texts in the sidebar
                         sold_by_elements = sidebar.find_all(string=re.compile("Sold by"))
                         
                         for el in sold_by_elements:
-                            # We only want the deepest text nodes to avoid grabbing giant blocks of code
                             parent = el.parent
                             if not parent: continue
                             
@@ -118,7 +108,6 @@ def scrape():
                             price = ""
                             warranty = ""
                             
-                            # Walk up the tree to find price and warranty next to the seller
                             container = parent.parent
                             for _ in range(5):
                                 if not container: break
@@ -144,11 +133,19 @@ def scrape():
                                     "warranty": warranty.replace("Warranty", "").strip() if warranty else ""
                                 })
                     
-                    # Deduplicate
                     unique_offers = list({ (o['seller_name'], o['price']): o for o in offers }.values())
                     
-                    # Inject the perfect array back into the n8n JSON output
-                    extracted["other_offers"] = unique_offers
+                    # --- 3. THE FIX FOR YOUR 500 ERROR ---
+                    # We check if your schema returned a List or a Dict, and inject safely.
+                    if isinstance(extracted, list):
+                        if len(extracted) > 0:
+                            extracted[0]["other_offers"] = unique_offers
+                        else:
+                            extracted.append({"other_offers": unique_offers})
+                    elif isinstance(extracted, dict):
+                        extracted["other_offers"] = unique_offers
+                    else:
+                        extracted = {"other_offers": unique_offers}
                     
                     output.append({
                         "url": result.url,
