@@ -39,6 +39,7 @@ def scrape():
     # THE TROJAN HORSE: Hybrid Isolation + Headless Failsafe
     # THE TROJAN HORSE: Final Polish (Ghost-Killer + Precision Warranty)
     # THE TROJAN HORSE: Deepest Node Algorithm
+    # THE TROJAN HORSE: Sidebar Isolation & String Cleanup
     wait_condition_js = """js:() => {
         if (document.getElementById('extracted_offers_json')) return true;
         if (window._isScrapingOffers) return false;
@@ -46,7 +47,7 @@ def scrape():
         
         (async () => {
             const uniqueOffers = [];
-            let fallbackDebugHtml = "TIMEOUT";
+            let fallbackDebugHtml = "TIMEOUT_SIDEBAR_NEVER_OPENED";
             
             try {
                 const bodyText = document.body.innerText || "";
@@ -92,7 +93,7 @@ def scrape():
                     targetButton.scrollIntoView({behavior: "smooth", block: "center"});
                     await delay(1000); 
                     targetButton.click();
-                    await delay(2500); // Give panel time to open
+                    await delay(2000); // Give panel time to open
                 }
                 
                 let attempts = 0;
@@ -102,83 +103,101 @@ def scrape():
                 while (attempts < 100) { 
                      const tempOffers = [];
                      
-                     // ✨ DEEPEST NODE ALGORITHM ✨
-                     // 1. Find every element that contains "Sold by"
-                     const allSoldBy = Array.from(document.querySelectorAll('p, div, span')).filter(el => (el.textContent || "").includes('Sold by'));
-                     
-                     // 2. Filter to ONLY the deepest elements (elements where none of their children contain "Sold by")
-                     // This guarantees we only get the exact wrapper and not the giant parent card.
-                     const deepestSoldBy = allSoldBy.filter(el => {
-                         return !Array.from(el.children).some(child => (child.textContent || "").includes('Sold by'));
+                     // 1. ISOLATE THE SIDEBAR
+                     // Look for the header that ONLY exists inside the side panel
+                     const headers = Array.from(document.querySelectorAll('span, h2, h3, h4, p, div')).filter(e => {
+                         const t = e.textContent.trim();
+                         return t.includes("Select from other sellers") || t === "Compare the best offers from other sellers";
                      });
                      
-                     deepestSoldBy.forEach(sellerEl => {
-                         // Because it's the deepest node, replacing 'Sold by' leaves ONLY the seller name!
-                         let sellerName = sellerEl.textContent.replace('Sold by', '').trim();
-                         if (!sellerName) return;
+                     let searchArea = null;
+                     
+                     if (headers.length > 0) {
+                         headers.sort((a, b) => {
+                             let depthA = 0, depthB = 0;
+                             let pA = a, pB = b;
+                             while(pA) { depthA++; pA = pA.parentElement; }
+                             while(pB) { depthB++; pB = pB.parentElement; }
+                             return depthB - depthA; 
+                         });
+                         let parent = headers[0].parentElement;
+                         for(let i = 0; i < 4; i++) { if(parent && parent.parentElement) parent = parent.parentElement; }
+                         searchArea = parent;
+                     }
+                     
+                     // ONLY extract if the sidebar is open and isolated!
+                     if (searchArea) {
+                         const allSoldBy = Array.from(searchArea.querySelectorAll('p, div, span')).filter(el => (el.textContent || "").includes('Sold by'));
                          
-                         let price = "";
-                         let warranty = "";
+                         const deepestSoldBy = allSoldBy.filter(el => {
+                             return !Array.from(el.children).some(child => (child.textContent || "").includes('Sold by'));
+                         });
                          
-                         // Traverse UP to find the price and warranty within this specific seller's card
-                         let container = sellerEl.parentElement;
-                         for (let i = 0; i < 7; i++) {
-                             if (!container) break;
+                         deepestSoldBy.forEach(sellerEl => {
+                             let sellerName = sellerEl.textContent.replace('Sold by', '').trim();
+                             if (!sellerName) return;
                              
-                             // Look for Price
-                             if (!price) {
-                                 const spans = Array.from(container.querySelectorAll('span, p, div'));
-                                 const curSpan = spans.find(s => s.textContent.trim() === 'LE' || s.textContent.trim() === 'EGP');
-                                 if (curSpan && curSpan.previousElementSibling) {
-                                     price = curSpan.previousElementSibling.textContent.trim();
-                                 } else {
-                                     // Regex fallback: Looks for a number followed by LE or EGP
-                                     const tMatch = (container.textContent || "").match(/([\d,.]+)\s*(LE|EGP)/);
-                                     if (tMatch) price = tMatch[1];
+                             let price = "";
+                             let warranty = "";
+                             
+                             let container = sellerEl.parentElement;
+                             for (let i = 0; i < 7; i++) {
+                                 if (!container) break;
+                                 
+                                 if (!price) {
+                                     const spans = Array.from(container.querySelectorAll('span, p, div'));
+                                     const curSpan = spans.find(s => s.textContent.trim() === 'LE' || s.textContent.trim() === 'EGP');
+                                     if (curSpan && curSpan.previousElementSibling) {
+                                         price = curSpan.previousElementSibling.textContent.trim();
+                                     } else {
+                                         const tMatch = (container.textContent || "").match(/([\d,.]+)\s*(LE|EGP)/);
+                                         if (tMatch) price = tMatch[1];
+                                     }
                                  }
+                                 
+                                 if (!warranty) {
+                                     const spans = Array.from(container.querySelectorAll('span, p, div'));
+                                     const wSpan = spans.find(s => (s.textContent || "").toLowerCase().includes('warranty'));
+                                     if (wSpan) {
+                                         // Clean up the "Warranty12 months warranty" bug
+                                         warranty = wSpan.textContent.replace(/warranty/ig, '').trim();
+                                         if (warranty) warranty = warranty + " warranty"; // Reconstruct it cleanly
+                                     }
+                                 }
+                                 
+                                 if (price) break; 
+                                 container = container.parentElement;
                              }
                              
-                             // Look for Warranty
-                             if (!warranty) {
-                                 const spans = Array.from(container.querySelectorAll('span, p, div'));
-                                 const wSpan = spans.find(s => (s.textContent || "").toLowerCase().includes('warranty'));
-                                 if (wSpan) warranty = wSpan.textContent.trim();
+                             if (sellerName && price) {
+                                 tempOffers.push({ seller_name: sellerName, price: price, warranty: warranty });
                              }
-                             
-                             // If we found price, this is the main card container, no need to go higher
-                             if (price) break; 
-                             container = container.parentElement;
-                         }
-                         
-                         if (sellerName && price) {
-                             tempOffers.push({ seller_name: sellerName, price: price, warranty: warranty });
-                         }
-                     });
+                         });
 
-                     // Deduplicate array
-                     const seen = new Set();
-                     const cleanOffers = [];
-                     tempOffers.forEach(o => {
-                         const key = o.seller_name + o.price;
-                         if (!seen.has(key)) {
-                             seen.add(key);
-                             cleanOffers.push(o);
-                         }
-                     });
-                     
-                     // Dynamic Exit Logic
-                     if (cleanOffers.length > 0) {
-                         if (cleanOffers.length === previousCount) {
-                             stableMatches++;
-                             if (stableMatches >= 4) { // Found data, stable for ~600ms, exit!
-                                 uniqueOffers.push(...cleanOffers);
-                                 break;
+                         const seen = new Set();
+                         const cleanOffers = [];
+                         tempOffers.forEach(o => {
+                             const key = o.seller_name + o.price;
+                             if (!seen.has(key)) {
+                                 seen.add(key);
+                                 cleanOffers.push(o);
                              }
-                         } else {
-                             stableMatches = 0;
-                             previousCount = cleanOffers.length;
+                         });
+                         
+                         if (cleanOffers.length > 0) {
+                             if (cleanOffers.length === previousCount) {
+                                 stableMatches++;
+                                 if (stableMatches >= 4) { 
+                                     uniqueOffers.push(...cleanOffers);
+                                     break; // Safe exit, panel is fully loaded
+                                 }
+                             } else {
+                                 stableMatches = 0;
+                                 previousCount = cleanOffers.length;
+                             }
                          }
                      } else {
+                         // Sidebar not found yet, prepare failsafe just in case
                          if (attempts === 99) {
                              fallbackDebugHtml = document.body ? document.body.innerHTML.substring(0, 1500) : "NO_BODY";
                          }
