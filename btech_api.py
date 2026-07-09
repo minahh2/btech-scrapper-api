@@ -1,53 +1,54 @@
 import json
 import asyncio
-import re
 from flask import Flask, request, jsonify
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
-from bs4 import BeautifulSoup
 
 app = Flask(__name__)
-browser_config = BrowserConfig(headless=True)
 
-async def btech_native_click(page, *args, **kwargs):
-    await page.wait_for_timeout(3000) 
-    btn = page.locator('div[data-slot="card-header"]').first
-    if await btn.count() > 0:
-        await btn.click(force=True)
-        await page.wait_for_timeout(4000) # Ensure full hydration
+# Realistic browser profile to avoid detection
+browser_config = BrowserConfig(
+    viewport_width=1920,
+    viewport_height=1080,
+    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+    headless=True 
+)
 
 @app.route('/scrape_btech', methods=['POST'])
 def scrape():
     data = request.get_json()
     url = data.get("urls")[0]
     
-    async def run_scraper():
+    async def run_interceptor():
         async with AsyncWebCrawler(config=browser_config) as crawler:
-            crawler.crawler_strategy.set_hook("after_goto", btech_native_click)
-            result = await crawler.arun(url=url)
+            # We will use this list to catch the API JSON
+            captured_json = []
+
+            async def handle_response(response):
+                # Look for the internal B.TECH API that lists offers
+                if "offering-count" in response.url or "product" in response.url and response.status == 200:
+                    try:
+                        content = await response.json()
+                        captured_json.append(content)
+                    except:
+                        pass
+
+            # Setup the crawler
+            browser = await crawler.browser_context.new_page()
+            browser.on("response", handle_response)
             
-            # THE "TRUTH SERUM" PARSER
-            soup = BeautifulSoup(result.html, 'html.parser')
+            await browser.goto(url)
             
-            # Get everything in the body
-            body_text = soup.body.get_text(" ", strip=True)
+            # Find and click the button
+            btn = browser.locator('div[data-slot="card-header"]')
+            if await btn.count() > 0:
+                await btn.click(force=True)
+                await asyncio.sleep(5) # Wait for the network call
             
-            # Find all prices (simple regex for EGP/LE)
-            prices = re.findall(r'[\d,]+\s*(?:LE|EGP)', body_text)
-            
-            # Find everything that looks like "Sold by ..."
-            # We look for "Sold by" and take the next 3 words
-            all_matches = re.findall(r'Sold\s*by\s*[\w\s]{1,20}', body_text, re.IGNORECASE)
-            
-            return {
-                "status": "Success",
-                "total_text_length": len(body_text),
-                "sold_by_found": all_matches,
-                "prices_found": prices,
-                "raw_body_preview": body_text[:1000] # See exactly what we are reading
-            }
+            return captured_json
 
     try:
-        return jsonify(asyncio.run(run_scraper()))
+        data = asyncio.run(run_interceptor())
+        return jsonify({"intercepted_data": data})
     except Exception as e:
         return jsonify({"error": str(e)})
 
