@@ -8,10 +8,11 @@ from crawl4ai import (
     BrowserConfig,
     CacheMode
 )
+from bs4 import BeautifulSoup
+import re
 
 app = Flask(__name__)
 
-# 1. Clean Browser Config
 browser_config = BrowserConfig(
     viewport_width=1920,
     viewport_height=1080,
@@ -21,253 +22,149 @@ browser_config = BrowserConfig(
     extra_args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"]
 )
 
+# 1. THE NATIVE CLICKER (Bypasses the JS Bot Blocker)
+async def btech_native_click(page, *args, **kwargs):
+    print("⏳ [HOOK] Attempting Native Hardware Click...")
+    try:
+        await page.wait_for_timeout(2000) # Let page settle
+        
+        # Look for the trigger text
+        selectors = [
+            'text="Compare the best offers from other sellers"',
+            'text="Select from other sellers"'
+        ]
+        
+        for sel in selectors:
+            btn = page.locator(sel).first
+            if await btn.count() > 0:
+                print("🎯 [HOOK] Button found! Sending OS-level click...")
+                await btn.scroll_into_view_if_needed()
+                await page.wait_for_timeout(500)
+                
+                # force=True is the magic that bypasses React's isTrusted check
+                await btn.click(force=True)
+                
+                print("⏳ [HOOK] Waiting 4 seconds for sidebar to animate and load data...")
+                await page.wait_for_timeout(4000)
+                break
+    except Exception as e:
+        print(f"❌ [HOOK] Click failed: {e}")
+
 @app.route('/scrape_btech', methods=['POST'])
 def scrape():
     data = request.get_json()
-    
-    if not data: return jsonify({"error": "No JSON payload received"}), 400
+    if not data: return jsonify({"error": "No payload"}), 400
          
     urls = data.get("urls")
     schema = data.get("schema")
 
-    if not isinstance(urls, list) or not isinstance(schema, dict):
-        return jsonify({"error": "Invalid input"}), 400
-
-    extraction_strategy = JsonCssExtractionStrategy(schema, verbose=True)
+    extraction_strategy = JsonCssExtractionStrategy(schema, verbose=False)
     
-    # THE TROJAN HORSE: Optimized for Headless Stability
-    # THE TROJAN HORSE: Hybrid Isolation + Headless Failsafe
-    # THE TROJAN HORSE: Final Polish (Ghost-Killer + Precision Warranty)
-    # THE TROJAN HORSE: Deepest Node Algorithm
-    # THE TROJAN HORSE: Sidebar Isolation & String Cleanup
-    wait_condition_js = """js:() => {
-        if (document.getElementById('extracted_offers_json')) return true;
-        if (window._isScrapingOffers) return false;
-        window._isScrapingOffers = true;
-        
-        (async () => {
-            const uniqueOffers = [];
-            let fallbackDebugHtml = "TIMEOUT_SIDEBAR_NEVER_OPENED";
-            
-            try {
-                const bodyText = document.body.innerText || "";
-                const HAS_OTHER_OFFERS = bodyText.includes("Offers starting from") || 
-                                         bodyText.includes("Compare the best offers") || 
-                                         bodyText.includes("Select from other sellers") ||
-                                         bodyText.includes("other sellers");
-                
-                if (!HAS_OTHER_OFFERS) {
-                     const resultDiv = document.createElement('div');
-                     resultDiv.id = 'extracted_offers_json';
-                     resultDiv.textContent = JSON.stringify([]);
-                     document.body.appendChild(resultDiv);
-                     return; 
-                }
-                
-                const delay = ms => new Promise(res => setTimeout(res, ms));
-                let targetButton = null;
-                const allElements = Array.from(document.querySelectorAll('*'));
-                 
-                for (let i = allElements.length - 1; i >= 0; i--) {
-                    const el = allElements[i];
-                    if (el.textContent && el.textContent.includes("Compare the best offers") && el.children.length === 0) {
-                         let parent = el.parentElement;
-                         while (parent && parent !== document.body) {
-                             if (parent.tagName === 'BUTTON' || parent.getAttribute('role') === 'button' || parent.classList.contains('cursor-pointer') || (parent.tagName === 'DIV' && parent.className.includes('flex'))) {
-                                 targetButton = parent;
-                                 break;
-                             }
-                             parent = parent.parentElement;
-                         }
-                         if (targetButton) break;
-                    }
-                }
-                
-                if (!targetButton) {
-                     const candidates = Array.from(document.querySelectorAll('button, div[role="button"], .cursor-pointer'));
-                     const specificButtons = candidates.filter(e => (e.textContent || "").includes("Compare the best offers"));
-                     if (specificButtons.length > 0) targetButton = specificButtons[specificButtons.length - 1];
-                }
-
-                if (targetButton) {
-                    targetButton.scrollIntoView({behavior: "smooth", block: "center"});
-                    await delay(1000); 
-                    targetButton.click();
-                    await delay(2000); // Give panel time to open
-                }
-                
-                let attempts = 0;
-                let previousCount = 0;
-                let stableMatches = 0;
-                
-                while (attempts < 100) { 
-                     const tempOffers = [];
-                     
-                     // 1. ISOLATE THE SIDEBAR
-                     // Look for the header that ONLY exists inside the side panel
-                     const headers = Array.from(document.querySelectorAll('span, h2, h3, h4, p, div')).filter(e => {
-                         const t = e.textContent.trim();
-                         return t.includes("Select from other sellers") || t === "Compare the best offers from other sellers";
-                     });
-                     
-                     let searchArea = null;
-                     
-                     if (headers.length > 0) {
-                         headers.sort((a, b) => {
-                             let depthA = 0, depthB = 0;
-                             let pA = a, pB = b;
-                             while(pA) { depthA++; pA = pA.parentElement; }
-                             while(pB) { depthB++; pB = pB.parentElement; }
-                             return depthB - depthA; 
-                         });
-                         let parent = headers[0].parentElement;
-                         for(let i = 0; i < 4; i++) { if(parent && parent.parentElement) parent = parent.parentElement; }
-                         searchArea = parent;
-                     }
-                     
-                     // ONLY extract if the sidebar is open and isolated!
-                     if (searchArea) {
-                         const allSoldBy = Array.from(searchArea.querySelectorAll('p, div, span')).filter(el => (el.textContent || "").includes('Sold by'));
-                         
-                         const deepestSoldBy = allSoldBy.filter(el => {
-                             return !Array.from(el.children).some(child => (child.textContent || "").includes('Sold by'));
-                         });
-                         
-                         deepestSoldBy.forEach(sellerEl => {
-                             let sellerName = sellerEl.textContent.replace('Sold by', '').trim();
-                             if (!sellerName) return;
-                             
-                             let price = "";
-                             let warranty = "";
-                             
-                             let container = sellerEl.parentElement;
-                             for (let i = 0; i < 7; i++) {
-                                 if (!container) break;
-                                 
-                                 if (!price) {
-                                     const spans = Array.from(container.querySelectorAll('span, p, div'));
-                                     const curSpan = spans.find(s => s.textContent.trim() === 'LE' || s.textContent.trim() === 'EGP');
-                                     if (curSpan && curSpan.previousElementSibling) {
-                                         price = curSpan.previousElementSibling.textContent.trim();
-                                     } else {
-                                         const tMatch = (container.textContent || "").match(/([\d,.]+)\s*(LE|EGP)/);
-                                         if (tMatch) price = tMatch[1];
-                                     }
-                                 }
-                                 
-                                 if (!warranty) {
-                                     const spans = Array.from(container.querySelectorAll('span, p, div'));
-                                     const wSpan = spans.find(s => (s.textContent || "").toLowerCase().includes('warranty'));
-                                     if (wSpan) {
-                                         // Clean up the "Warranty12 months warranty" bug
-                                         warranty = wSpan.textContent.replace(/warranty/ig, '').trim();
-                                         if (warranty) warranty = warranty + " warranty"; // Reconstruct it cleanly
-                                     }
-                                 }
-                                 
-                                 if (price) break; 
-                                 container = container.parentElement;
-                             }
-                             
-                             if (sellerName && price) {
-                                 tempOffers.push({ seller_name: sellerName, price: price, warranty: warranty });
-                             }
-                         });
-
-                         const seen = new Set();
-                         const cleanOffers = [];
-                         tempOffers.forEach(o => {
-                             const key = o.seller_name + o.price;
-                             if (!seen.has(key)) {
-                                 seen.add(key);
-                                 cleanOffers.push(o);
-                             }
-                         });
-                         
-                         if (cleanOffers.length > 0) {
-                             if (cleanOffers.length === previousCount) {
-                                 stableMatches++;
-                                 if (stableMatches >= 4) { 
-                                     uniqueOffers.push(...cleanOffers);
-                                     break; // Safe exit, panel is fully loaded
-                                 }
-                             } else {
-                                 stableMatches = 0;
-                                 previousCount = cleanOffers.length;
-                             }
-                         }
-                     } else {
-                         // Sidebar not found yet, prepare failsafe just in case
-                         if (attempts === 99) {
-                             fallbackDebugHtml = document.body ? document.body.innerHTML.substring(0, 1500) : "NO_BODY";
-                         }
-                     }
-                     
-                     await delay(150);
-                     attempts++;
-                }
-                
-            } catch (error) {
-                console.error("Error in JS execution:", error);
-            } finally {
-                const resultDiv = document.createElement('div');
-                resultDiv.id = 'extracted_offers_json';
-                
-                if (uniqueOffers.length === 0) {
-                    resultDiv.textContent = JSON.stringify([{ "error": "No offers found", "debug_html": fallbackDebugHtml }]);
-                } else {
-                    resultDiv.textContent = JSON.stringify(uniqueOffers);
-                }
-                document.body.appendChild(resultDiv);
-            }
-        })();
-        
-        return false;
-    }"""
     config = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         extraction_strategy=extraction_strategy,
-        scan_full_page=True,      
+        scan_full_page=True,
         scroll_delay=0.3,
         simulate_user=True,
-        wait_for=wait_condition_js, 
-        excluded_tags=['nav', 'footer', 'header', 'script', 'style', 'noscript'],
-        exclude_external_links=True,
-        exclude_social_media_links=True,
-        exclude_external_images=True,
-        page_timeout=60000        
+        page_timeout=60000,
+        excluded_tags=['nav', 'footer', 'header', 'script', 'style', 'noscript']
     )
 
     async def run_scraper():
-        async with AsyncWebCrawler(config=browser_config, verbose=True) as crawler:
+        async with AsyncWebCrawler(config=browser_config, verbose=False) as crawler:
+            
+            # Attach the Native Clicker
+            crawler.crawler_strategy.set_hook("after_goto", btech_native_click)
+            
             results = await crawler.arun_many(urls=urls, config=config)
+            
             output = []
             for result in results:
                 if result.success:
                     try:
                         extracted = json.loads(result.extracted_content)
-                    except Exception:
-                        extracted = {"error": "Failed to parse extracted content"}
+                    except:
+                        extracted = {}
+                    
+                    # 2. THE PYTHON TEXT EXTRACTOR (Replaces the complex JS)
+                    soup = BeautifulSoup(result.html, 'html.parser')
+                    
+                    # Find the sidebar by looking for its header
+                    sidebar_headers = soup.find_all(string=re.compile("Select from other sellers|Compare the best offers from other sellers"))
+                    
+                    offers = []
+                    if sidebar_headers:
+                        # Go up a few levels to grab the sidebar container
+                        sidebar = sidebar_headers[-1].parent.parent.parent.parent
+                        
+                        # Find all "Sold by" texts in the sidebar
+                        sold_by_elements = sidebar.find_all(string=re.compile("Sold by"))
+                        
+                        for el in sold_by_elements:
+                            # We only want the deepest text nodes to avoid grabbing giant blocks of code
+                            parent = el.parent
+                            if not parent: continue
+                            
+                            seller_name = ""
+                            spans = parent.find_all('span')
+                            if len(spans) >= 2:
+                                seller_name = spans[1].text.strip()
+                            else:
+                                seller_name = parent.text.replace('Sold by', '').strip()
+                                
+                            if not seller_name or 'EGP' in seller_name or 'LE' in seller_name:
+                                continue
+                                
+                            price = ""
+                            warranty = ""
+                            
+                            # Walk up the tree to find price and warranty next to the seller
+                            container = parent.parent
+                            for _ in range(5):
+                                if not container: break
+                                
+                                if not price:
+                                    currency_tags = container.find_all(string=re.compile("^(LE|EGP)$"))
+                                    if currency_tags:
+                                        prev = currency_tags[0].parent.find_previous_sibling()
+                                        if prev: price = prev.text.strip()
+                                
+                                if not warranty:
+                                    w_tags = container.find_all(string=re.compile("warranty", re.IGNORECASE))
+                                    if w_tags: 
+                                        warranty = w_tags[0].text.strip()
+                                        
+                                if price: break
+                                container = container.parent
+                                
+                            if seller_name and price:
+                                offers.append({
+                                    "seller_name": seller_name, 
+                                    "price": price, 
+                                    "warranty": warranty.replace("Warranty", "").strip() if warranty else ""
+                                })
+                    
+                    # Deduplicate
+                    unique_offers = list({ (o['seller_name'], o['price']): o for o in offers }.values())
+                    
+                    # Inject the perfect array back into the n8n JSON output
+                    extracted["other_offers"] = unique_offers
+                    
                     output.append({
                         "url": result.url,
                         "status": result.status_code,
                         "data": extracted
                     })
                 else:
-                    output.append({
-                        "url": result.url,
-                        "status": result.status_code,
-                        "error": result.error_message
-                    })
+                    output.append({"url": result.url, "error": result.error_message})
             return output
 
     try:
-        result = asyncio.run(run_scraper())
-        return jsonify(result)
+        return jsonify(asyncio.run(run_scraper()))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     from waitress import serve
-    print("🚀 Starting B.TECH production server...")
+    print("🚀 Starting B.TECH Native production server...")
     serve(app, host='0.0.0.0', port=5002, threads=2)
