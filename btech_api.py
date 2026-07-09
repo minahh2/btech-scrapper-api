@@ -44,7 +44,7 @@ async def btech_native_click(page, *args, **kwargs):
                 await btn.click(force=True)
                 clicked = True
                 print("⚡ [HOOK] Click sequence executed. Holding for animation...")
-                await page.wait_for_timeout(4000) # Wait 4s for network fetch
+                await page.wait_for_timeout(4000)
                 break
         except Exception as e:
             pass
@@ -72,7 +72,7 @@ def scrape():
 
     extraction_strategy = JsonCssExtractionStrategy(schema, verbose=False)
     
-    # THE TROJAN HORSE: Target Lock & Patience update
+    # THE TROJAN HORSE: Hard Validation Lock Engine
     wait_condition_js = """js:() => {
         if (document.getElementById('extracted_offers_json')) return true;
         if (window._isScrapingOffers) return false;
@@ -81,23 +81,22 @@ def scrape():
         (async () => {
             const delay = ms => new Promise(res => setTimeout(res, ms));
             const uniqueOffers = [];
-            let fallbackDebugHtml = "TIMEOUT";
             
             try {
                 let attempts = 0;
                 let previousCount = 0;
                 let stableMatches = 0;
-                let expectedCount = 0; // Target Lock
+                let expectedCount = 0; 
                 
-                while (attempts < 120) { // Up to 18 seconds total
+                while (attempts < 120) { // Keep alive up to 18 seconds max
                      const tempOffers = [];
                      
-                     // 1. ISOLATE SIDEBAR
+                     // 1. ISOLATE SIDEBAR PANEL CONTAINER
                      const headers = Array.from(document.querySelectorAll('span, h2, h3, h4, p, div')).filter(e => {
                          const t = e.textContent.trim();
                          return t.includes("Select from other sellers") || 
                                 t === "Compare the best offers from other sellers" || 
-                                t === "All sellers";
+                                t.includes("All sellers");
                      });
                      
                      let searchArea = null;
@@ -115,18 +114,25 @@ def scrape():
                      }
                      
                      if (searchArea) {
-                         // Attempt to find the target count (e.g. "5 sellers")
+                         // 2. DYNAMICALLY READ SELLER COUNT FROM HEADER
                          if (expectedCount === 0) {
-                             const spans = Array.from(searchArea.querySelectorAll('span'));
-                             const countSpan = spans.find(s => s.textContent.toLowerCase().includes('sellers') && s.textContent.match(/(\d+)/));
-                             if (countSpan) {
-                                 const match = countSpan.textContent.match(/(\d+)/);
-                                 if (match) expectedCount = parseInt(match[1]);
+                             const potentialElements = Array.from(searchArea.querySelectorAll('span, p, div, h2, h3, h4'));
+                             for (let el of potentialElements) {
+                                 const txt = el.textContent.trim();
+                                 // Look for patterns like "5 sellers", "All sellers (5)", "Offers (5)"
+                                 let match = txt.match(/(\d+)\s*(?:sellers|offers)/i) || txt.match(/(?:sellers|offers)\s*\(?(\d+)\)?/i);
+                                 if (!match && (txt.toLowerCase().includes("sellers") || txt.toLowerCase().includes("offers"))) {
+                                     match = txt.match(/(\d+)/);
+                                 }
+                                 if (match) {
+                                     expectedCount = parseInt(match[1], 10);
+                                     console.log("🎯 Target lock established! Expecting exactly " + expectedCount + " sellers.");
+                                     break;
+                                 }
                              }
                          }
 
                          const allSoldBy = Array.from(searchArea.querySelectorAll('p, div, span')).filter(el => (el.textContent || "").includes('Sold by'));
-                         
                          const deepestSoldBy = allSoldBy.filter(el => {
                              return !Array.from(el.children).some(child => (child.textContent || "").includes('Sold by'));
                          });
@@ -137,11 +143,10 @@ def scrape():
                              
                              let price = "";
                              let warranty = "";
-                             
                              let container = sellerEl.parentElement;
+                             
                              for (let i = 0; i < 7; i++) {
                                  if (!container) break;
-                                 
                                  if (!price) {
                                      const spans = Array.from(container.querySelectorAll('span, p, div'));
                                      const curSpan = spans.find(s => s.textContent.trim() === 'LE' || s.textContent.trim() === 'EGP');
@@ -161,7 +166,6 @@ def scrape():
                                          if (warranty) warranty = warranty + " warranty"; 
                                      }
                                  }
-                                 
                                  if (price) break; 
                                  container = container.parentElement;
                              }
@@ -181,26 +185,33 @@ def scrape():
                              }
                          });
                          
-                         // DYNAMIC EXIT LOGIC (PATIENT MODE)
+                         // 3. HARD VALIDATION LOCK EXIT CONDITION
                          if (cleanOffers.length > 0) {
-                             if (expectedCount > 0 && cleanOffers.length >= expectedCount) {
-                                 // We hit the target number! Wait just a split second to ensure text is fully rendered, then exit.
-                                 stableMatches++;
-                                 if (stableMatches >= 2) {
-                                     uniqueOffers.push(...cleanOffers);
-                                     break;
-                                 }
-                             } else if (cleanOffers.length === previousCount) {
-                                 // We don't have the target number yet, so we wait patiently.
-                                 stableMatches++;
-                                 if (stableMatches >= 18) { // Wait 2.7 seconds (18 loops * 150ms) before giving up!
-                                     uniqueOffers.push(...cleanOffers);
-                                     break; 
+                             if (expectedCount > 0) {
+                                 // Target lock condition: Loop keeps running until array length matches the header count
+                                 if (cleanOffers.length >= expectedCount) {
+                                     stableMatches++;
+                                     if (stableMatches >= 2) { // 300ms verification step
+                                         uniqueOffers.push(...cleanOffers);
+                                         break;
+                                     }
+                                 } else {
+                                     // Count matches haven't filled up yet, reset stable counter to keep loop running
+                                     stableMatches = 0;
+                                     previousCount = cleanOffers.length;
                                  }
                              } else {
-                                 // A new seller just loaded! Reset the timer.
-                                 stableMatches = 0;
-                                 previousCount = cleanOffers.length;
+                                 // Fallback: If header layout changes completely and we can't extract a raw number
+                                 if (cleanOffers.length === previousCount) {
+                                     stableMatches++;
+                                     if (stableMatches >= 18) { // Wait for 2.7 seconds of complete text stillness
+                                         uniqueOffers.push(...cleanOffers);
+                                         break; 
+                                     }
+                                 } else {
+                                     stableMatches = 0;
+                                     previousCount = cleanOffers.length;
+                                 }
                              }
                          }
                      }
@@ -249,13 +260,11 @@ def scrape():
                     except:
                         extracted = {}
                     
-                    # 2. BULLETPROOF REGEX PARSING ENGINE FOR MAIN PAGE FALLBACK
                     soup = BeautifulSoup(result.html, 'html.parser')
                     offers = []
                     
                     for tag in soup.find_all(['span', 'p', 'div', 'td']):
                         raw_text = tag.get_text(" ", strip=True)
-                        
                         if "Sold by" in raw_text and len(raw_text) < 300:
                             name_match = re.search(r'Sold\s*by\s*([^0-9\nLE|EGP,$]+)', raw_text, re.IGNORECASE)
                             seller_name = name_match.group(1).strip() if name_match else raw_text.replace("Sold by", "").strip()
@@ -266,7 +275,6 @@ def scrape():
                             
                             price = ""
                             warranty = ""
-                            
                             tracker = tag
                             for _ in range(5):
                                 if not tracker: break
@@ -292,7 +300,6 @@ def scrape():
                     
                     unique_offers = list({ (o['seller_name'].lower(), o['price']): o for o in offers }.values())
                     
-                    # Structuring response schema output safely
                     if isinstance(extracted, list):
                         if len(extracted) > 0:
                             extracted[0]["other_offers"] = unique_offers
