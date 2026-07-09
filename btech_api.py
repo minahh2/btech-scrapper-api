@@ -1,10 +1,11 @@
 import asyncio
+import re
 from flask import Flask, request, jsonify
 from playwright.async_api import async_playwright
 
 app = Flask(__name__)
 
-async def get_btech_data_robust(url):
+async def get_data_robust(url):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
@@ -12,66 +13,63 @@ async def get_btech_data_robust(url):
         )
         page = await context.new_page()
 
-        # Variable to store intercepted data
-        api_data = None
-
-        # 1. Start listening for the specific API response
+        # Capture Container for API Data
+        api_payload = {"offers": []}
+        
+        # 1. Capture the API response automatically
         async def handle_response(response):
             if "offers?" in response.url:
                 try:
-                    nonlocal api_data
-                    api_data = await response.json()
+                    api_payload["offers"] = await response.json()
                 except: pass
-
         page.on("response", handle_response)
 
-        # 2. Load the page
+        # 2. Go to page
         await page.goto(url, wait_until="domcontentloaded")
-        
-        # 3. Target the button and click
-        try:
-            btn = page.locator('div[data-slot="card-header"]')
-            if await btn.count() > 0:
-                await btn.click(force=True)
-                # CRITICAL: Wait specifically for the API response
-                await page.wait_for_response(lambda r: "offers?" in r.url, timeout=15000)
-                await asyncio.sleep(1) # Extra buffer
-        except Exception as e:
-            print(f"Click/Network error: {e}")
+        await asyncio.sleep(5) # Wait for network hydration
 
-        # Extract DOM data as fallback
-        product_info = await page.evaluate('''() => {
+        # 3. Robust Extraction using generic attributes (less fragile than CSS selectors)
+        data = await page.evaluate('''() => {
+            const getTxt = (sel) => document.querySelector(sel)?.innerText || "N/A";
+            // Searching for common B.TECH patterns
             return {
                 "product_name": document.querySelector('h1')?.innerText || "N/A",
-                "brand": document.querySelector('[data-slot="brand-name"]')?.innerText || "N/A",
-                "recommended_seller_price": document.querySelector('.price-main')?.innerText || "N/A",
-                "warranty": "12 months warranty"
+                "brand": document.querySelector('h1')?.innerText?.split(' ')[0] || "N/A",
+                "price": document.querySelector('[class*="price"]')?.innerText || "N/A",
+                "warranty": document.body.innerText.match(/\\d+\\s*(?:month|year)s?\\s*warranty/i)?.[0] || "12 months warranty"
             }
         }''')
         
         await browser.close()
-        
-        # Format the intercepted API data
-        formatted_offers = []
-        if api_data:
-            for item in api_data:
-                formatted_offers.append({
-                    "seller_name": item.get("store_name"),
-                    "price": item.get("price", {}).get("final_price_formatted"),
-                    "warranty": item.get("warranty") or "12 months warranty"
-                })
-
-        return {**product_info, "other_offers": formatted_offers}
+        return {**data, "other_offers": api_payload["offers"]}
 
 @app.route('/scrape_btech', methods=['POST'])
 def scrape():
-    data = request.get_json()
-    url = data.get("urls")[0]
+    url = request.get_json().get("urls")[0]
     try:
-        result = asyncio.run(get_btech_data_robust(url))
-        return jsonify({"data": [result], "status": 200, "url": url})
+        res = asyncio.run(get_data_robust(url))
+        
+        # Format the API response
+        formatted_offers = []
+        for item in res.get("other_offers", []):
+            formatted_offers.append({
+                "seller_name": item.get("store_name"),
+                "price": item.get("price", {}).get("final_price_formatted"),
+                "warranty": item.get("warranty") or "12 months warranty"
+            })
+            
+        return jsonify({
+            "data": [{
+                "brand": res["brand"],
+                "product_name": res["product_name"],
+                "recommended_seller_price": res["price"],
+                "warranty": res["warranty"],
+                "other_offers": formatted_offers
+            }],
+            "status": 200
+        })
     except Exception as e:
-        return jsonify({"error": str(e), "status": 500})
+        return jsonify({"error": str(e)})
 
 if __name__ == '__main__':
     from waitress import serve
