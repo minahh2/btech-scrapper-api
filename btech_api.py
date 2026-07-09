@@ -16,15 +16,16 @@ browser_config = BrowserConfig(
     viewport_width=1920,
     viewport_height=1080,
     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-    user_agent_mode="random"
+    user_agent_mode="random",
+    headless=True,
+    extra_args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"]
 )
 
 @app.route('/scrape_btech', methods=['POST'])
 def scrape():
     data = request.get_json()
     
-    if not data:
-         return jsonify({"error": "No JSON payload received"}), 400
+    if not data: return jsonify({"error": "No JSON payload received"}), 400
          
     urls = data.get("urls")
     schema = data.get("schema")
@@ -34,16 +35,12 @@ def scrape():
 
     extraction_strategy = JsonCssExtractionStrategy(schema, verbose=True)
     
-    # THE TROJAN HORSE: Your verified "Surgical" JS Script
+    # THE TROJAN HORSE: Optimized for Headless Stability
     wait_condition_js = """js:() => {
-        // 1. If the div exists, we are done! Unblock Python instantly.
         if (document.getElementById('extracted_offers_json')) return true;
-        
-        // 2. Prevent duplicate script launches
         if (window._isScrapingOffers) return false;
         window._isScrapingOffers = true;
         
-        // 3. Launch the Surgical Extractor in the background
         (async () => {
             const uniqueOffers = [];
             try {
@@ -90,30 +87,15 @@ def scrape():
                     el.scrollIntoView({behavior: "smooth", block: "center"});
                     await delay(1000); 
                     el.click();
-                    await delay(500);
+                    await delay(1000); // Give panel time to open
                 }
                 
-                let expectedCount = 1; 
-                let waitCountAttempts = 0;
-                let countSpan = null;
-                
-                while (!countSpan && waitCountAttempts < 50) { 
-                     const spans = Array.from(document.querySelectorAll('span'));
-                     countSpan = spans.find(s => s.textContent.toLowerCase().includes('sellers') && s.textContent.match(/(\d+)/));
-                     if (countSpan) break;
-                     await delay(100);
-                     waitCountAttempts++;
-                }
-                
-                if (countSpan) {
-                    const match = countSpan.textContent.match(/(\d+)/);
-                    if (match) expectedCount = parseInt(match[1]);
-                }
-
                 let attempts = 0;
+                let previousCount = 0;
                 let stableMatches = 0;
                 
-                while (attempts < 150) { 
+                // LOOP SAFETY: Max 100 attempts (approx 15 seconds)
+                while (attempts < 100) { 
                      const tempOffers = [];
                      
                      // ✨ SURGICAL EXTRACTION ✨
@@ -150,6 +132,7 @@ def scrape():
                          }
                      });
 
+                     // Deduplicate
                      const seen = new Set();
                      const cleanOffers = [];
                      tempOffers.forEach(o => {
@@ -160,14 +143,19 @@ def scrape():
                          }
                      });
                      
-                     if (cleanOffers.length >= expectedCount && expectedCount > 0) {
-                         stableMatches++;
-                         if (stableMatches > 3) {
-                             uniqueOffers.push(...cleanOffers);
-                             break;
+                     // DYNAMIC RELEASE LOGIC (Fixes the 44-second timeout)
+                     if (cleanOffers.length > 0) {
+                         if (cleanOffers.length === previousCount) {
+                             stableMatches++;
+                             // If the array hasn't changed in 5 loops (~750ms), assume it's fully loaded and exit!
+                             if (stableMatches >= 5) {
+                                 uniqueOffers.push(...cleanOffers);
+                                 break;
+                             }
+                         } else {
+                             stableMatches = 0;
+                             previousCount = cleanOffers.length;
                          }
-                     } else {
-                         stableMatches = 0;
                      }
                      
                      await delay(150);
@@ -177,7 +165,6 @@ def scrape():
             } catch (error) {
                 console.error("Error in JS execution:", error);
             } finally {
-                // Return the perfect array back to Python via the DOM
                 const resultDiv = document.createElement('div');
                 resultDiv.id = 'extracted_offers_json';
                 resultDiv.textContent = JSON.stringify(uniqueOffers || []);
@@ -185,7 +172,7 @@ def scrape():
             }
         })();
         
-        return false; // Tells Python "Wait until the div exists!"
+        return false;
     }"""
 
     config = CrawlerRunConfig(
@@ -194,7 +181,7 @@ def scrape():
         scan_full_page=True,      
         scroll_delay=0.3,
         simulate_user=True,
-        wait_for=wait_condition_js, # The Trojan Horse is loaded
+        wait_for=wait_condition_js, 
         excluded_tags=['nav', 'footer', 'header', 'script', 'style', 'noscript'],
         exclude_external_links=True,
         exclude_social_media_links=True,
@@ -233,5 +220,5 @@ def scrape():
 
 if __name__ == '__main__':
     from waitress import serve
-    print("🚀 Starting B.TECH production server with Waitress...")
+    print("🚀 Starting B.TECH production server...")
     serve(app, host='0.0.0.0', port=5002, threads=2)
