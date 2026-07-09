@@ -88,89 +88,65 @@ def scrape():
                     except:
                         extracted = {}
                     
-                    # 2. PURE PYTHON PARSER
                     soup = BeautifulSoup(result.html, 'html.parser')
+                    
+                    # 1. ISOLATE THE DIALOG (Sidebar)
+                    # We look for the "All sellers" dialog
+                    dialog = soup.find(attrs={"role": "dialog"})
+                    
+                    # If the sidebar isn't explicitly role="dialog", find the section containing "Sold by"
+                    if not dialog:
+                        dialog = soup.find('body')
+
+                    # 2. FIND ALL SELLER CARDS
+                    # We find all 'p' tags that contain "Sold by"
+                    sold_by_tags = dialog.find_all('p', string=re.compile("Sold by", re.IGNORECASE))
+                    
                     offers = []
                     
-                    # Search the entire soup since Headless mode might strip 'role="dialog"'
-                    sold_by_nodes = soup.find_all(string=re.compile("Sold by", re.IGNORECASE))
-                    
-                    for text_node in sold_by_nodes:
-                        parent = text_node.parent
-                        if not parent: continue
-
-                        # A. Get Seller Name
-                        seller_name = parent.text.replace("Sold by", "").strip()
-                        if not seller_name:
-                            sib = parent.find_next_sibling()
-                            if sib: seller_name = sib.text.strip()
-                        
-                        # Clean up sticky layout text
-                        for delimiter in ["Other sellers", "Compare", "Delivery"]:
-                            if delimiter in seller_name:
-                                seller_name = seller_name.split(delimiter)[0].strip()
-                        
-                        # Ghost Killer
-                        if not seller_name or 'EGP' in seller_name or 'LE' in seller_name or len(seller_name) > 40:
-                            continue
-
-                        # B. Get Price and Warranty
-                        price = ""
-                        warranty = ""
-                        card = parent.parent
-                        
-                        for _ in range(7):
-                            if not card: break
-                            
-                            if not price:
-                                # Find EGP or LE
-                                currency = card.find(string=re.compile("^(LE|EGP)$"))
-                                if currency:
-                                    prev = currency.parent.find_previous_sibling()
-                                    if prev: price = prev.text.strip()
-                                if not price:
-                                    m = re.search(r'([\d,.]+)\s*(LE|EGP)', card.text)
-                                    if m: price = m.group(1)
-                                    
-                            if not warranty:
-                                w_node = card.find(string=re.compile("warranty", re.IGNORECASE))
-                                if w_node:
-                                    warranty = w_node.parent.text.lower().replace("warranty", "").strip()
-                                    if warranty: warranty += " warranty"
-                                    
-                            if price: break
+                    for p_tag in sold_by_tags:
+                        # Go up to the card container
+                        card = p_tag.parent
+                        # Traverse up 2-3 levels to find the box that holds the Seller, Price, and Warranty
+                        for _ in range(3):
+                            if card and card.find(string=re.compile("LE|EGP")):
+                                break
                             card = card.parent
-
-                        if seller_name and price:
+                        
+                        if not card: continue
+                        
+                        # Extract Seller
+                        seller_name = p_tag.text.replace("Sold by", "").strip()
+                        
+                        # Extract Price
+                        price_match = re.search(r'([\d,.]+)\s*(LE|EGP)', card.text)
+                        price = price_match.group(1) if price_match else "0"
+                        
+                        # Extract Warranty
+                        warranty_node = card.find(string=re.compile("warranty", re.IGNORECASE))
+                        warranty = warranty_node.strip() if warranty_node else "12 months warranty"
+                        
+                        if seller_name and price != "0":
                             offers.append({
                                 "seller_name": seller_name,
                                 "price": price,
-                                "warranty": warranty if warranty else "12 months warranty"
+                                "warranty": warranty
                             })
                     
-                    # Deduplicate perfectly
+                    # 3. CLEAN DATA
                     unique_offers = list({ (o['seller_name'].lower(), o['price']): o for o in offers }.values())
                     
-                    # Format output for n8n safely
+                    # Inject into schema
                     if isinstance(extracted, list):
                         if len(extracted) > 0:
                             extracted[0]["other_offers"] = unique_offers
                         else:
                             extracted.append({"other_offers": unique_offers})
-                    elif isinstance(extracted, dict):
-                        extracted["other_offers"] = unique_offers
                     else:
-                        extracted = {"other_offers": unique_offers}
-                    
-                    output.append({
-                        "url": result.url,
-                        "status": result.status_code,
-                        "data": extracted
-                    })
-                else:
-                    output.append({"url": result.url, "error": result.error_message})
+                        extracted["other_offers"] = unique_offers
+                        
+                    output.append({"url": result.url, "status": result.status_code, "data": extracted})
             return output
-
     try:
         return jsonify(asyncio.run(run_scraper()))
     except Exception as e:
