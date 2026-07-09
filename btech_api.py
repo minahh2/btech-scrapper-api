@@ -22,36 +22,51 @@ browser_config = BrowserConfig(
     extra_args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"]
 )
 
-# 1. THE NATIVE CLICKER (Bypasses React isTrusted blocker)
+# 1. UPGRADED MULTI-STRATEGY CLICKER HOOK
 async def btech_native_click(page, *args, **kwargs):
-    print("⏳ [HOOK] Attempting Native Hardware Click...")
-    try:
-        await page.wait_for_timeout(2000)
-        
-        selectors = [
-            'text="Compare the best offers from other sellers"',
-            'text="Select from other sellers"'
-        ]
-        
-        for sel in selectors:
+    print("⏳ [HOOK] Initializing interactive actions...")
+    await page.wait_for_timeout(3000) # Let React component mounting settle
+    
+    selectors = [
+        'text="Compare the best offers from other sellers"',
+        'text="Select from other sellers"',
+        'button:has-text("offers")',
+        'div:has-text("Compare the best offers")'
+    ]
+    
+    clicked = False
+    for sel in selectors:
+        try:
             btn = page.locator(sel).first
-            if await btn.count() > 0:
-                print("🎯 [HOOK] Button found! Sending OS-level click...")
+            if await btn.count() > 0 and await btn.is_visible():
+                print(f"🎯 [HOOK] Match found via: {sel}. Triggering OS-level click...")
                 await btn.scroll_into_view_if_needed()
                 await page.wait_for_timeout(500)
-                
                 await btn.click(force=True)
-                
-                print("⏳ [HOOK] Waiting 4 seconds for sidebar to load...")
-                await page.wait_for_timeout(4000)
+                clicked = True
+                print("⚡ [HOOK] Click sequence executed. Holding for animation...")
+                await page.wait_for_timeout(5000)
                 break
-    except Exception as e:
-        print(f"❌ [HOOK] Click failed: {e}")
+        except Exception as e:
+            print(f"⚠️ [HOOK] Selector skip: {sel} ({e})")
+            
+    if not clicked:
+        print("🔍 [HOOK] Standard click skipped. Deploying window fallback event...")
+        try:
+            await page.evaluate("""() => {
+                const elements = Array.from(document.querySelectorAll('button, div, span, p'));
+                const target = elements.find(e => e.textContent && e.textContent.includes('Compare the best offers'));
+                if (target) { target.click(); return true; }
+                return false;
+            }""")
+            await page.wait_for_timeout(4000)
+        except Exception as e:
+            print(f"❌ [HOOK] Secondary trigger failed: {e}")
 
 @app.route('/scrape_btech', methods=['POST'])
 def scrape():
     data = request.get_json()
-    if not data: return jsonify({"error": "No payload"}), 400
+    if not data: return jsonify({"error": "No payload payload detected"}), 400
          
     urls = data.get("urls")
     schema = data.get("schema")
@@ -62,7 +77,7 @@ def scrape():
         cache_mode=CacheMode.BYPASS,
         extraction_strategy=extraction_strategy,
         scan_full_page=True,
-        scroll_delay=0.3,
+        scroll_delay=0.4,
         simulate_user=True,
         page_timeout=60000,
         excluded_tags=['nav', 'footer', 'header', 'script', 'style', 'noscript']
@@ -71,7 +86,6 @@ def scrape():
     async def run_scraper():
         async with AsyncWebCrawler(config=browser_config, verbose=False) as crawler:
             crawler.crawler_strategy.set_hook("after_goto", btech_native_click)
-            
             results = await crawler.arun_many(urls=urls, config=config)
             
             output = []
@@ -82,61 +96,57 @@ def scrape():
                     except:
                         extracted = {}
                     
-                    # 2. PYTHON SURGICAL EXTRACTION
+                    # 2. BULLETPROOF REGEX PARSING ENGINE
                     soup = BeautifulSoup(result.html, 'html.parser')
-                    sidebar_headers = soup.find_all(string=re.compile("Select from other sellers|Compare the best offers from other sellers"))
-                    
                     offers = []
-                    if sidebar_headers:
-                        sidebar = sidebar_headers[-1].parent.parent.parent.parent
-                        sold_by_elements = sidebar.find_all(string=re.compile("Sold by"))
+                    
+                    # Scan visual text containers across the layout
+                    for tag in soup.find_all(['span', 'p', 'div', 'td']):
+                        raw_text = tag.get_text(" ", strip=True)
                         
-                        for el in sold_by_elements:
-                            parent = el.parent
-                            if not parent: continue
+                        if "Sold by" in raw_text and len(raw_text) < 300:
+                            # Safely extract merchant strings using regex boundaries
+                            name_match = re.search(r'Sold\s*by\s*([^0-9\nLE|EGP,$]+)', raw_text, re.IGNORECASE)
+                            seller_name = name_match.group(1).strip() if name_match else raw_text.replace("Sold by", "").strip()
                             
-                            seller_name = ""
-                            spans = parent.find_all('span')
-                            if len(spans) >= 2:
-                                seller_name = spans[1].text.strip()
-                            else:
-                                seller_name = parent.text.replace('Sold by', '').strip()
-                                
-                            if not seller_name or 'EGP' in seller_name or 'LE' in seller_name:
-                                continue
-                                
+                            # Clean up trailing layout clutter from smashed tags
+                            for delimiter in ["Other sellers", "Compare", "Delivery", "Store"]:
+                                if delimiter in seller_name:
+                                    seller_name = seller_name.split(delimiter)[0].strip()
+                            
                             price = ""
                             warranty = ""
                             
-                            container = parent.parent
+                            # Trace up the DOM lineage locally to isolate matching prices/warranties
+                            tracker = tag
                             for _ in range(5):
-                                if not container: break
+                                if not tracker: break
+                                lineage_text = tracker.get_text(" ", strip=True)
                                 
                                 if not price:
-                                    currency_tags = container.find_all(string=re.compile("^(LE|EGP)$"))
-                                    if currency_tags:
-                                        prev = currency_tags[0].parent.find_previous_sibling()
-                                        if prev: price = prev.text.strip()
+                                    price_match = re.search(r'([\d,]+)\s*(?:EGP|LE)', lineage_text)
+                                    if price_match:
+                                        price = price_match.group(1)
                                 
                                 if not warranty:
-                                    w_tags = container.find_all(string=re.compile("warranty", re.IGNORECASE))
-                                    if w_tags: 
-                                        warranty = w_tags[0].text.strip()
-                                        
-                                if price: break
-                                container = container.parent
+                                    warranty_match = re.search(r'(\d+)\s*(?:month|year)s?\s*warranty', lineage_text, re.IGNORECASE)
+                                    if warranty_match:
+                                        warranty = warranty_match.group(1) + " months warranty"
                                 
-                            if seller_name and price:
+                                if price and warranty: break
+                                tracker = tracker.parent
+                            
+                            if seller_name and price and len(seller_name) < 60:
                                 offers.append({
-                                    "seller_name": seller_name, 
-                                    "price": price, 
-                                    "warranty": warranty.replace("Warranty", "").strip() if warranty else ""
+                                    "seller_name": seller_name,
+                                    "price": price,
+                                    "warranty": warranty if warranty else "12 months warranty"
                                 })
                     
-                    unique_offers = list({ (o['seller_name'], o['price']): o for o in offers }.values())
+                    # 3. ATOMIC DE-DUPLICATION
+                    unique_offers = list({ (o['seller_name'].lower(), o['price']): o for o in offers }.values())
                     
-                    # --- 3. THE FIX FOR YOUR 500 ERROR ---
-                    # We check if your schema returned a List or a Dict, and inject safely.
+                    # Structuring response schema output safely
                     if isinstance(extracted, list):
                         if len(extracted) > 0:
                             extracted[0]["other_offers"] = unique_offers
