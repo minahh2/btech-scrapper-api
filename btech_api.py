@@ -37,6 +37,7 @@ def scrape():
     
     # THE TROJAN HORSE: Optimized for Headless Stability
     # THE TROJAN HORSE: Hybrid Isolation + Headless Failsafe
+    # THE TROJAN HORSE: Final Polish (Ghost-Killer + Precision Warranty)
     wait_condition_js = """js:() => {
         if (document.getElementById('extracted_offers_json')) return true;
         if (window._isScrapingOffers) return false;
@@ -89,7 +90,7 @@ def scrape():
                     el.scrollIntoView({behavior: "smooth", block: "center"});
                     await delay(1000); 
                     el.click();
-                    await delay(2000); // Give panel time to open
+                    await delay(2000); // Wait for React to open the panel
                 }
                 
                 let attempts = 0;
@@ -99,53 +100,75 @@ def scrape():
                 while (attempts < 100) { 
                      const tempOffers = [];
                      
-                     // 🚀 HYBRID ISOLATION 🚀
-                     // 1. Find the sidebar header first
-                     const headers = Array.from(document.querySelectorAll('*')).filter(e => 
-                         e.textContent === "Select from other sellers" || 
-                         e.textContent === "Compare the best offers from other sellers"
-                     );
+                     // 1. Find the sidebar header to isolate our search area
+                     const headers = Array.from(document.querySelectorAll('span, h2, h3, h4, p, div')).filter(e => {
+                         const t = e.textContent.trim();
+                         return t === "Select from other sellers" || t === "Compare the best offers from other sellers";
+                     });
                      
-                     let searchArea = document; // Default to whole page
+                     // Sort to get the deepest exact text match
+                     headers.sort((a, b) => {
+                         let depthA = 0, depthB = 0;
+                         let pA = a, pB = b;
+                         while(pA) { depthA++; pA = pA.parentElement; }
+                         while(pB) { depthB++; pB = pB.parentElement; }
+                         return depthB - depthA; 
+                     });
+
+                     let searchArea = document; 
                      if (headers.length > 0) {
-                         // Walk up to get the sidebar container
                          let parent = headers[0].parentElement;
                          for(let i = 0; i < 4; i++) { if(parent && parent.parentElement) parent = parent.parentElement; }
                          if (parent) searchArea = parent;
                      }
                      
-                     // 2. Use the proven 'Sold by' search that worked previously, but restricted to the searchArea!
+                     // 2. Find all "Sold by" elements inside our isolated area
                      const sellerPars = Array.from(searchArea.querySelectorAll('p, div')).filter(p => p.textContent.includes('Sold by') && p.children.length > 0);
+                     const processedSellers = new Set();
                      
                      sellerPars.forEach(sellerP => {
                          let sellerName = "";
                          let price = "";
                          let warranty = "";
                          
-                         const spans = sellerP.querySelectorAll('span');
-                         if (spans.length >= 2) sellerName = spans[1].textContent.trim();
-                         else sellerName = sellerP.textContent.replace('Sold by', '').trim();
+                         // --- EXACT SELLER NAME EXTRACTION ---
+                         const childSpans = Array.from(sellerP.querySelectorAll('span'));
+                         const soldBySpan = childSpans.find(s => s.textContent.includes('Sold by'));
                          
-                         if (!sellerName) return;
+                         if (soldBySpan && soldBySpan.nextElementSibling) {
+                             sellerName = soldBySpan.nextElementSibling.textContent.trim();
+                         } else if (childSpans.length >= 2) {
+                             sellerName = childSpans[1].textContent.trim();
+                         } else {
+                             sellerName = sellerP.textContent.replace('Sold by', '').trim();
+                         }
+                         
+                         // 🔥 KILL THE GHOST SELLER 🔥 (Ignore EGP/LE mistakes)
+                         if (!sellerName || sellerName.includes('EGP') || sellerName.includes('LE')) return;
+                         
+                         // Prevent duplicates from nested divs
+                         if (processedSellers.has(sellerName)) return; 
+                         processedSellers.add(sellerName);
 
-                         let container = sellerP.parentElement;
-                         for (let i = 0; i < 6; i++) {
-                             if (!container) break;
-                             const cSpans = Array.from(container.querySelectorAll('span'));
+                         // --- EXACT PRICE & WARRANTY EXTRACTION ---
+                         // B.TECH perfectly wraps price/warranty in the direct parent of the seller <p>
+                         const cardContainer = sellerP.parentElement;
+                         if (cardContainer) {
+                             const allSpans = Array.from(cardContainer.querySelectorAll('span, p'));
                              
-                             const foundPrice = cSpans.find(s => {
-                                 const txt = s.textContent.trim();
-                                 return /^\s*[\d,.]+\s*$/.test(txt) && !txt.includes('EGP') && !txt.includes('LE');
-                             });
-                             
-                             if (foundPrice && (container.textContent.includes('EGP') || container.textContent.includes('LE'))) {
-                                 price = foundPrice.textContent.trim();
-                                 
-                                 const wEl = cSpans.find(s => s.textContent.toLowerCase().includes('warranty'));
-                                 if (wEl) warranty = wEl.textContent.trim();
-                                 break;
+                             // Get Price (Look for LE or EGP, then grab the number before it)
+                             const currencySpan = allSpans.find(s => s.textContent.trim() === 'LE' || s.textContent.trim() === 'EGP');
+                             if (currencySpan && currencySpan.previousElementSibling) {
+                                 price = currencySpan.previousElementSibling.textContent.trim();
+                             } else {
+                                 // Fallback if the DOM slightly shifted
+                                 const pSpan = allSpans.find(s => /^\s*[\d,.]+\s*$/.test(s.textContent.trim()) && s.nextElementSibling && ['LE', 'EGP'].includes(s.nextElementSibling.textContent.trim()));
+                                 if (pSpan) price = pSpan.textContent.trim();
                              }
-                             container = container.parentElement;
+                             
+                             // Get Warranty
+                             const wEl = allSpans.find(s => s.textContent.toLowerCase().includes('warranty'));
+                             if (wEl) warranty = wEl.textContent.trim();
                          }
                          
                          if (sellerName && price) {
@@ -153,6 +176,7 @@ def scrape():
                          }
                      });
 
+                     // Deduplicate array
                      const seen = new Set();
                      const cleanOffers = [];
                      tempOffers.forEach(o => {
@@ -163,10 +187,11 @@ def scrape():
                          }
                      });
                      
+                     // Smart exit strategy
                      if (cleanOffers.length > 0) {
                          if (cleanOffers.length === previousCount) {
                              stableMatches++;
-                             if (stableMatches >= 4) {
+                             if (stableMatches >= 4) { // Found data, wait a beat to ensure it's stable, then exit!
                                  uniqueOffers.push(...cleanOffers);
                                  break;
                              }
@@ -176,9 +201,7 @@ def scrape():
                          }
                      } else {
                          // IF FAILING: Grab the raw HTML of the headless sidebar so we can fix it!
-                         if (attempts === 99) {
-                             fallbackDebugHtml = searchArea.innerHTML.substring(0, 1000); 
-                         }
+                         if (attempts === 99) fallbackDebugHtml = searchArea.innerHTML.substring(0, 1000); 
                      }
                      
                      await delay(150);
@@ -191,20 +214,17 @@ def scrape():
                 const resultDiv = document.createElement('div');
                 resultDiv.id = 'extracted_offers_json';
                 
-                // If it failed, output the debug HTML to n8n
                 if (uniqueOffers.length === 0) {
                     resultDiv.textContent = JSON.stringify([{ "error": "No offers found", "debug_html": fallbackDebugHtml }]);
                 } else {
                     resultDiv.textContent = JSON.stringify(uniqueOffers);
                 }
-                
                 document.body.appendChild(resultDiv);
             }
         })();
         
         return false;
     }"""
-
     config = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         extraction_strategy=extraction_strategy,
