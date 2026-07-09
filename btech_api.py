@@ -4,7 +4,7 @@ from playwright.async_api import async_playwright
 
 app = Flask(__name__)
 
-async def get_btech_data_robust(url):
+async def get_btech_data_surgical(url):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
@@ -12,30 +12,29 @@ async def get_btech_data_robust(url):
         )
         page = await context.new_page()
 
-        # 1. Load the page
+        # Load page
         await page.goto(url, wait_until="domcontentloaded")
         
-        # 2. Setup the click and response listener in ONE atomic action
-        btn = page.locator('div[data-slot="card-header"]')
-        
-        if await btn.count() > 0:
-            print("🎯 Clicking button and waiting for API...")
-            # This is the modern, robust way to wait for a network response
-            async with page.expect_response(lambda r: "offers?" in r.url, timeout=20000) as response_info:
-                await btn.click(force=True)
+        # 1. Setup the "Spy" for the API request BEFORE clicking
+        # We look for any response that contains "offers" and returns JSON
+        async with page.expect_response(lambda r: "offers?" in r.url, timeout=20000) as response_info:
             
-            # Extract JSON from the captured response
-            response = await response_info.value
-            api_data = await response.json()
-        else:
-            print("⚠️ Button not found.")
-            api_data = []
+            # 2. NUCLEAR CLICK: Don't use playwright locator.click()
+            # Use JS to trigger the element directly from its selector
+            await page.evaluate('''() => {
+                const btn = document.querySelector('[data-slot="card-header"]');
+                if (btn) btn.click();
+            }''')
+        
+        # Capture the result
+        response = await response_info.value
+        api_data = await response.json()
 
-        # 3. Extract basic DOM info
+        # 3. DOM Extraction (Fallback)
         product_info = await page.evaluate('''() => {
             return {
                 "product_name": document.querySelector('h1')?.innerText || "N/A",
-                "brand": "Honor", 
+                "brand": "Honor",
                 "price": document.querySelector('[class*="price"]')?.innerText || "N/A",
                 "warranty": "12 months warranty"
             }
@@ -48,8 +47,9 @@ async def get_btech_data_robust(url):
 def scrape():
     data = request.get_json()
     url = data.get("urls")[0]
+    
     try:
-        res = asyncio.run(get_btech_data_robust(url))
+        res = asyncio.run(get_btech_data_surgical(url))
         
         formatted_offers = []
         if isinstance(res.get("other_offers"), list):
@@ -71,7 +71,7 @@ def scrape():
             "status": 200
         })
     except Exception as e:
-        return jsonify({"error": str(e), "status": 500})
+        return jsonify({"error": f"Scrape failed: {str(e)}", "status": 500})
 
 if __name__ == '__main__':
     from waitress import serve
