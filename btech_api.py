@@ -5,9 +5,7 @@ from flask import Flask, request, jsonify
 from crawl4ai import (
     AsyncWebCrawler,
     CrawlerRunConfig,
-    JsonCssExtractionStrategy,
     BrowserConfig,
-    CacheMode
 )
 from bs4 import BeautifulSoup
 
@@ -21,14 +19,35 @@ browser_config = BrowserConfig(
     extra_args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"]
 )
 
+# 1. THE BLOCKING HOOK
 async def btech_native_click(page, *args, **kwargs):
+    print("⏳ [HOOK] Starting B.TECH Sidebar Hunter...")
     await page.wait_for_timeout(3000) 
-    # Force click on the container element that holds the text "Other sellers for this product"
-    # Using a broad selector to ensure it hits
-    locator = page.locator('div:has-text("Other sellers for this product")').first
-    if await locator.count() > 0:
-        await locator.click(force=True)
-        await page.wait_for_timeout(4000) 
+    
+    # Target the button
+    btn = page.locator('div[data-slot="card-header"]:has-text("Other sellers for this product")').first
+    
+    if await btn.count() > 0:
+        print("🎯 [HOOK] Button found, clicking...")
+        await btn.click(force=True)
+        
+        # BLOCKING WAIT: Don't let the crawler run until we see multiple "Sold by" in the DOM
+        print("⏳ [HOOK] Blocking crawler until sidebar content verifies...")
+        try:
+            # We wait until the DOM contains at least 3 "Sold by" strings
+            # This forces the page to be fully loaded with the sidebar content before extraction
+            await page.wait_for_function("""
+                () => {
+                    const text = document.body.innerText;
+                    const count = (text.match(/Sold by/g) || []).length;
+                    return count >= 3;
+                }
+            """, timeout=10000)
+            print("✅ [HOOK] Sidebar verified and fully loaded!")
+        except:
+            print("⚠️ [HOOK] Timeout waiting for sidebar content. Proceeding anyway.")
+    else:
+        print("❌ [HOOK] Button not found, falling back to main page.")
 
 @app.route('/scrape_btech', methods=['POST'])
 def scrape():
@@ -37,10 +56,8 @@ def scrape():
     schema = data.get("schema")
 
     config = CrawlerRunConfig(
-        cache_mode=CacheMode.BYPASS,
         scan_full_page=True,
         simulate_user=True,
-        excluded_tags=['script', 'style', 'noscript'],
         page_timeout=60000
     )
 
@@ -51,28 +68,45 @@ def scrape():
             
             output = []
             for result in results:
-                # DUMP RAW HTML FOR DEBUGGING
                 soup = BeautifulSoup(result.html, 'html.parser')
                 
-                # Attempt to find "Sold by" anywhere
-                all_text = soup.get_text(" ", strip=True)
-                sold_by_presence = "Sold by" in all_text
+                # DEBUGGING: List ALL "Sold by" findings for this run
+                found_texts = [tag.text.strip() for tag in soup.find_all(string=re.compile("Sold by"))]
                 
-                # If we can't find it, give us the HTML so we can debug
-                raw_html_sample = soup.prettify()[:5000] if not sold_by_presence else "FOUND_SOLD_BY_TEXT"
-                
-                # Logic to scrape everything that looks like a seller card
+                # If we have more than 1 "Sold by", we are in the sidebar!
                 offers = []
-                # Looking for divs that might contain seller info
-                for div in soup.find_all('div'):
-                    if "Sold by" in div.text and len(div.text) < 200:
-                        offers.append(div.text.strip())
+                # Use a broader search area
+                search_area = soup.find(attrs={"role": "dialog"}) or soup
+                
+                sold_by_nodes = search_area.find_all(string=re.compile("Sold by", re.IGNORECASE))
+                
+                for node in sold_by_nodes:
+                    parent = node.parent
+                    seller_name = parent.text.replace("Sold by", "").strip()
+                    if len(seller_name) > 30: continue # Cleanup junk
+                    
+                    # Logic to pull price from surrounding nodes
+                    card = parent.parent
+                    price = ""
+                    # Search nearby for currency
+                    for _ in range(5):
+                        if not card: break
+                        match = re.search(r'([\d,.]+)\s*(LE|EGP)', card.text)
+                        if match: 
+                            price = match.group(1)
+                            break
+                        card = card.parent
+                    
+                    if seller_name and price:
+                        offers.append({"seller_name": seller_name, "price": price})
+
+                unique_offers = list({ (o['seller_name'], o['price']): o for o in offers }.values())
                 
                 output.append({
                     "url": result.url,
-                    "debug_sold_by_detected": sold_by_presence,
-                    "debug_raw_html_preview": raw_html_sample,
-                    "debug_found_blocks": offers
+                    "debug_total_found": len(found_texts),
+                    "debug_all_strings": found_texts,
+                    "other_offers": unique_offers
                 })
             return output
 
