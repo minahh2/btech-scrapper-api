@@ -11,7 +11,7 @@ from crawl4ai import (
 
 app = Flask(__name__)
 
-# 1. EXACTLY YOUR ORIGINAL CONFIG (Clean, no extra args)
+# 1. Clean Browser Config
 browser_config = BrowserConfig(
     viewport_width=1920,
     viewport_height=1080,
@@ -19,7 +19,7 @@ browser_config = BrowserConfig(
     user_agent_mode="random"
 )
 
-@app.route('/scrape_btech9', methods=['POST'])
+@app.route('/scrape_btech', methods=['POST'])
 def scrape():
     data = request.get_json()
     
@@ -34,27 +34,25 @@ def scrape():
 
     extraction_strategy = JsonCssExtractionStrategy(schema, verbose=True)
     
-    # THE TROJAN HORSE: Patched for the new "bukra" UI, LE currency, and new button text
+    # THE TROJAN HORSE: Your verified "Surgical" JS Script
     wait_condition_js = """js:() => {
         // 1. If the div exists, we are done! Unblock Python instantly.
         if (document.getElementById('extracted_offers_json')) return true;
         
-        // 2. If we already launched the script, don't launch it again, just wait.
+        // 2. Prevent duplicate script launches
         if (window._isScrapingOffers) return false;
         window._isScrapingOffers = true;
         
-        // 3. Launch YOUR EXACT ORIGINAL JS CODE in the background
+        // 3. Launch the Surgical Extractor in the background
         (async () => {
             const uniqueOffers = [];
             try {
                 const bodyText = document.body.innerText || "";
-                // NEW: Updated to match the new button text and panel titles
                 const HAS_OTHER_OFFERS = bodyText.includes("Offers starting from") || 
                                          bodyText.includes("Compare the best offers from other sellers") || 
                                          bodyText.includes("Select from other sellers");
                 
                 if (!HAS_OTHER_OFFERS) {
-                     console.log("Strict Check: No 'Offers starting from' text found. Assuming Single Offer Page.");
                      const resultDiv = document.createElement('div');
                      resultDiv.id = 'extracted_offers_json';
                      resultDiv.textContent = JSON.stringify([]);
@@ -62,16 +60,12 @@ def scrape():
                      return; 
                 }
                 
-                console.log("Strict Check: Multi-offer text found. Enforcing Strict Wait Mode.");
                 const delay = ms => new Promise(res => setTimeout(res, ms));
-                console.log("Locating 'Compare the best offers from other sellers' button...");
-                
                 let targetButton = null;
                 const allElements = Array.from(document.querySelectorAll('*'));
                  
                 for (let i = allElements.length - 1; i >= 0; i--) {
                     const el = allElements[i];
-                    // NEW: Looking for the exact new string
                     if (el.textContent && el.textContent.includes("Compare the best offers from other sellers") && el.children.length === 0) {
                          let parent = el.parentElement;
                          while (parent && parent !== document.body) {
@@ -85,42 +79,25 @@ def scrape():
                     }
                 }
                 
-                let el = null;
-                if (targetButton) {
-                     console.log("Found target button via text content.");
-                     el = targetButton;
-                } else {
+                let el = targetButton;
+                if (!el) {
                      const candidates = Array.from(document.querySelectorAll('button, div[role="button"], .flex.justify-between, .cursor-pointer'));
-                     const specificButtons = candidates.filter(e => {
-                          const txt = e.textContent || "";
-                          return txt.includes("Compare the best offers from other sellers");
-                     });
-                     
-                     if (specificButtons.length > 0) {
-                         el = specificButtons[specificButtons.length - 1];
-                         console.log("Found target button via candidate filter.");
-                     } else {
-                          console.log("Specific button NOT found. Assuming 1-Offer Page or already open.");
-                          el = null; 
-                     }
+                     const specificButtons = candidates.filter(e => (e.textContent || "").includes("Compare the best offers from other sellers"));
+                     if (specificButtons.length > 0) el = specificButtons[specificButtons.length - 1];
                 }
 
                 if (el) {
-                    console.log("Scrolling to element...");
                     el.scrollIntoView({behavior: "smooth", block: "center"});
                     await delay(1000); 
-                    console.log("Clicking element...");
                     el.click();
                     await delay(500);
                 }
                 
-                console.log("Waiting for sidebar content...");
-                let expectedCount = 2; 
+                let expectedCount = 1; 
                 let waitCountAttempts = 0;
                 let countSpan = null;
                 
-                // NEW: Robust 'Sellers Count' detection for the new Bukra UI (e.g. '5 sellers')
-                while (!countSpan && waitCountAttempts < 100) { 
+                while (!countSpan && waitCountAttempts < 50) { 
                      const spans = Array.from(document.querySelectorAll('span'));
                      countSpan = spans.find(s => s.textContent.toLowerCase().includes('sellers') && s.textContent.match(/(\d+)/));
                      if (countSpan) break;
@@ -129,12 +106,8 @@ def scrape():
                 }
                 
                 if (countSpan) {
-                    console.log("DEBUG: Count Span found: ", countSpan.textContent);
                     const match = countSpan.textContent.match(/(\d+)/);
-                    if (match) {
-                        expectedCount = parseInt(match[1]);
-                        console.log(`Expecting exactly ${expectedCount} sellers based on selector.`);
-                    }
+                    if (match) expectedCount = parseInt(match[1]);
                 }
 
                 let attempts = 0;
@@ -142,58 +115,39 @@ def scrape():
                 
                 while (attempts < 150) { 
                      const tempOffers = [];
-                     let rejectedCount = 0;
                      
-                     // NEW: The seller is now inside nested spans `<p><span>Sold by</span><span>Name</span></p>`
-                     const sellerPars = Array.from(document.querySelectorAll('p, div')).filter(p => p.textContent.includes('Sold by') && p.children.length > 0);
+                     // ✨ SURGICAL EXTRACTION ✨
+                     const cards = document.querySelectorAll('[data-slot="card"], [data-slot="expandable-card"]');
                      
-                     // Use a set to prevent duplicating reads from nested divs
-                     const processedSellers = new Set();
-
-                     sellerPars.forEach(sellerP => {
-                        const sNameRaw = sellerP.textContent.trim().replace('Sold by', '').trim();
-                        if (processedSellers.has(sNameRaw)) return;
-                        processedSellers.add(sNameRaw);
-
-                        let container = sellerP.parentElement;
-                        let priceEl = null;
-                        let warrantyText = "";
-                        
-                        for (let i = 0; i < 6; i++) {
-                            if (!container) break;
-                            const spans = Array.from(container.querySelectorAll('span'));
-                            
-                            // NEW: Notice how we check for 'LE' now instead of just 'EGP'
-                            const foundPrice = spans.find(s => {
-                                const txt = s.textContent.trim();
-                                return /^\s*[\d,.]+\s*$/.test(txt) && !txt.includes('EGP') && !txt.includes('LE');
-                            });
-                            
-                            // If we found the number, check if its container has LE or EGP
-                            if (foundPrice && (container.textContent.includes('EGP') || container.textContent.includes('LE'))) {
-                                priceEl = foundPrice;
-                                
-                                // NEW: Warranty is now an inline span with an SVG image inside
-                                const wEl = spans.find(s => s.textContent.toLowerCase().includes('warranty'));
-                                if (wEl) {
-                                    warrantyText = wEl.textContent.trim();
-                                }
-                                break;
-                            }
-                            container = container.parentElement;
-                        }
-                        
-                        const pText = priceEl ? priceEl.textContent.trim() : "";
-                        
-                        if (sNameRaw.length > 0 && pText.length > 0) {
-                             tempOffers.push({
-                                price: pText,
-                                seller_name: sNameRaw,
-                                warranty: warrantyText
-                             });
-                        } else {
-                            rejectedCount++;
-                        }
+                     cards.forEach(card => {
+                         let sellerName = "";
+                         let price = "";
+                         let warranty = "";
+                         
+                         const pTags = card.querySelectorAll('p');
+                         const soldByP = Array.from(pTags).find(p => (p.textContent || "").includes('Sold by'));
+                         if (soldByP) {
+                             const spans = soldByP.querySelectorAll('span');
+                             if (spans.length >= 2) sellerName = spans[1].textContent.trim();
+                             else sellerName = soldByP.textContent.replace('Sold by', '').trim();
+                         }
+                         
+                         const priceSpans = card.querySelectorAll('span');
+                         const currencySpan = Array.from(priceSpans).find(s => {
+                             const t = s.textContent.trim();
+                             return t === 'LE' || t === 'EGP';
+                         });
+                         
+                         if (currencySpan && currencySpan.previousElementSibling) {
+                             price = currencySpan.previousElementSibling.textContent.trim();
+                         }
+                         
+                         const wSpan = Array.from(priceSpans).find(s => (s.textContent || "").toLowerCase().includes('warranty'));
+                         if (wSpan) warranty = wSpan.textContent.trim();
+                         
+                         if (sellerName && price) {
+                             tempOffers.push({ seller_name: sellerName, price: price, warranty: warranty });
+                         }
                      });
 
                      const seen = new Set();
@@ -206,16 +160,9 @@ def scrape():
                          }
                      });
                      
-                     if (expectedCount > 1 && cleanOffers.length === 1 && attempts === 50 && el) {
-                         el.scrollIntoView({behavior: "smooth", block: "center"});
-                         el.click();
-                     }
-                     
-                     const totalProcessed = cleanOffers.length + rejectedCount;
-                     
-                     if (totalProcessed >= expectedCount && expectedCount > 0) {
+                     if (cleanOffers.length >= expectedCount && expectedCount > 0) {
                          stableMatches++;
-                         if (stableMatches > 4) { // Increased stability threshold slightly
+                         if (stableMatches > 3) {
                              uniqueOffers.push(...cleanOffers);
                              break;
                          }
@@ -223,19 +170,14 @@ def scrape():
                          stableMatches = 0;
                      }
                      
-                     if (cleanOffers.length > expectedCount) { 
-                          uniqueOffers.push(...cleanOffers); 
-                          break;
-                     }
-                     
-                     await delay(100);
+                     await delay(150);
                      attempts++;
                 }
                 
             } catch (error) {
                 console.error("Error in JS execution:", error);
             } finally {
-                // The moment this injects, Playwright will detect it and unblock Python!
+                // Return the perfect array back to Python via the DOM
                 const resultDiv = document.createElement('div');
                 resultDiv.id = 'extracted_offers_json';
                 resultDiv.textContent = JSON.stringify(uniqueOffers || []);
@@ -243,28 +185,21 @@ def scrape():
             }
         })();
         
-        return false; // Tell Playwright to keep polling until the div exists
+        return false; // Tells Python "Wait until the div exists!"
     }"""
 
-    # 2. YOUR EXACT RUN CONFIGURATION
     config = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         extraction_strategy=extraction_strategy,
-        
-        # We removed js_code parameter entirely! The script is now safely running inside wait_for.
-        
-        scan_full_page=True,      # RESTORED: Exactly as you demanded for B.TECH lazy loading
+        scan_full_page=True,      
         scroll_delay=0.3,
         simulate_user=True,
-        
-        wait_for=wait_condition_js, # The Trojan Horse
-        
-        # Performance Targeting & Exclusions
+        wait_for=wait_condition_js, # The Trojan Horse is loaded
         excluded_tags=['nav', 'footer', 'header', 'script', 'style', 'noscript'],
         exclude_external_links=True,
         exclude_social_media_links=True,
         exclude_external_images=True,
-        page_timeout=60000        # Safety net, but your JS will unblock it in 8-12s
+        page_timeout=60000        
     )
 
     async def run_scraper():
@@ -290,7 +225,6 @@ def scrape():
                     })
             return output
 
-    # 3. MEMORY SAFE ASYNC EXECUTION
     try:
         result = asyncio.run(run_scraper())
         return jsonify(result)
