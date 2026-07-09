@@ -23,11 +23,14 @@ browser_config = BrowserConfig(
 )
 
 # 1. PURE PYTHON HOOK: Clicks and waits for Radix UI Dialog
+# 1. PURE PYTHON HOOK: Clicks and waits for Radix UI Dialog
 async def btech_native_click(page, *args, **kwargs):
     print("⏳ [HOOK] Hunting for B.TECH button...")
     await page.wait_for_timeout(2000) 
     
+    # Updated to target the main card title first!
     selectors = [
+        'text="Other sellers for this product"',
         'text="Compare the best offers from other sellers"',
         'text="Select from other sellers"'
     ]
@@ -36,15 +39,19 @@ async def btech_native_click(page, *args, **kwargs):
         try:
             btn = page.locator(sel).first
             if await btn.count() > 0 and await btn.is_visible():
-                print("🎯 [HOOK] Button found! Sending OS-level click...")
-                await btn.scroll_into_view_if_needed()
-                await page.wait_for_timeout(500)
+                print(f"🎯 [HOOK] Button found! Scrolling to safe center zone...")
+                
+                # MAGIC FIX: Forces the button to the exact center of the screen, 
+                # completely avoiding the black sticky navigation header!
+                await btn.evaluate("el => el.scrollIntoView({block: 'center', inline: 'center'})")
+                await page.wait_for_timeout(1000) # Let the scroll finish
+                
+                print("🎯 [HOOK] Sending OS-level click...")
                 await btn.click(force=True)
                 
                 print("⏳ [HOOK] Waiting for Radix UI Sidebar to mount...")
-                # Playwright natively waits for the sidebar to physically exist
                 await page.wait_for_selector('[role="dialog"]', state="visible", timeout=6000)
-                await page.wait_for_timeout(1000) # Give React a second to render the text
+                await page.wait_for_timeout(1000) 
                 print("✅ [HOOK] Sidebar is open and ready!")
                 break
         except Exception as e:
