@@ -36,6 +36,7 @@ def scrape():
     extraction_strategy = JsonCssExtractionStrategy(schema, verbose=True)
     
     # THE TROJAN HORSE: Optimized for Headless Stability
+    # THE TROJAN HORSE: Hybrid Isolation + Headless Failsafe
     wait_condition_js = """js:() => {
         if (document.getElementById('extracted_offers_json')) return true;
         if (window._isScrapingOffers) return false;
@@ -43,6 +44,7 @@ def scrape():
         
         (async () => {
             const uniqueOffers = [];
+            let fallbackDebugHtml = "NO_DATA";
             try {
                 const bodyText = document.body.innerText || "";
                 const HAS_OTHER_OFFERS = bodyText.includes("Offers starting from") || 
@@ -87,52 +89,70 @@ def scrape():
                     el.scrollIntoView({behavior: "smooth", block: "center"});
                     await delay(1000); 
                     el.click();
-                    await delay(1000); // Give panel time to open
+                    await delay(2000); // Give panel time to open
                 }
                 
                 let attempts = 0;
                 let previousCount = 0;
                 let stableMatches = 0;
                 
-                // LOOP SAFETY: Max 100 attempts (approx 15 seconds)
                 while (attempts < 100) { 
                      const tempOffers = [];
                      
-                     // ✨ SURGICAL EXTRACTION ✨
-                     const cards = document.querySelectorAll('[data-slot="card"], [data-slot="expandable-card"]');
+                     // 🚀 HYBRID ISOLATION 🚀
+                     // 1. Find the sidebar header first
+                     const headers = Array.from(document.querySelectorAll('*')).filter(e => 
+                         e.textContent === "Select from other sellers" || 
+                         e.textContent === "Compare the best offers from other sellers"
+                     );
                      
-                     cards.forEach(card => {
+                     let searchArea = document; // Default to whole page
+                     if (headers.length > 0) {
+                         // Walk up to get the sidebar container
+                         let parent = headers[0].parentElement;
+                         for(let i = 0; i < 4; i++) { if(parent && parent.parentElement) parent = parent.parentElement; }
+                         if (parent) searchArea = parent;
+                     }
+                     
+                     // 2. Use the proven 'Sold by' search that worked previously, but restricted to the searchArea!
+                     const sellerPars = Array.from(searchArea.querySelectorAll('p, div')).filter(p => p.textContent.includes('Sold by') && p.children.length > 0);
+                     
+                     sellerPars.forEach(sellerP => {
                          let sellerName = "";
                          let price = "";
                          let warranty = "";
                          
-                         const pTags = card.querySelectorAll('p');
-                         const soldByP = Array.from(pTags).find(p => (p.textContent || "").includes('Sold by'));
-                         if (soldByP) {
-                             const spans = soldByP.querySelectorAll('span');
-                             if (spans.length >= 2) sellerName = spans[1].textContent.trim();
-                             else sellerName = soldByP.textContent.replace('Sold by', '').trim();
+                         const spans = sellerP.querySelectorAll('span');
+                         if (spans.length >= 2) sellerName = spans[1].textContent.trim();
+                         else sellerName = sellerP.textContent.replace('Sold by', '').trim();
+                         
+                         if (!sellerName) return;
+
+                         let container = sellerP.parentElement;
+                         for (let i = 0; i < 6; i++) {
+                             if (!container) break;
+                             const cSpans = Array.from(container.querySelectorAll('span'));
+                             
+                             const foundPrice = cSpans.find(s => {
+                                 const txt = s.textContent.trim();
+                                 return /^\s*[\d,.]+\s*$/.test(txt) && !txt.includes('EGP') && !txt.includes('LE');
+                             });
+                             
+                             if (foundPrice && (container.textContent.includes('EGP') || container.textContent.includes('LE'))) {
+                                 price = foundPrice.textContent.trim();
+                                 
+                                 const wEl = cSpans.find(s => s.textContent.toLowerCase().includes('warranty'));
+                                 if (wEl) warranty = wEl.textContent.trim();
+                                 break;
+                             }
+                             container = container.parentElement;
                          }
-                         
-                         const priceSpans = card.querySelectorAll('span');
-                         const currencySpan = Array.from(priceSpans).find(s => {
-                             const t = s.textContent.trim();
-                             return t === 'LE' || t === 'EGP';
-                         });
-                         
-                         if (currencySpan && currencySpan.previousElementSibling) {
-                             price = currencySpan.previousElementSibling.textContent.trim();
-                         }
-                         
-                         const wSpan = Array.from(priceSpans).find(s => (s.textContent || "").toLowerCase().includes('warranty'));
-                         if (wSpan) warranty = wSpan.textContent.trim();
                          
                          if (sellerName && price) {
                              tempOffers.push({ seller_name: sellerName, price: price, warranty: warranty });
                          }
                      });
 
-                     // Deduplicate
                      const seen = new Set();
                      const cleanOffers = [];
                      tempOffers.forEach(o => {
@@ -143,18 +163,21 @@ def scrape():
                          }
                      });
                      
-                     // DYNAMIC RELEASE LOGIC (Fixes the 44-second timeout)
                      if (cleanOffers.length > 0) {
                          if (cleanOffers.length === previousCount) {
                              stableMatches++;
-                             // If the array hasn't changed in 5 loops (~750ms), assume it's fully loaded and exit!
-                             if (stableMatches >= 5) {
+                             if (stableMatches >= 4) {
                                  uniqueOffers.push(...cleanOffers);
                                  break;
                              }
                          } else {
                              stableMatches = 0;
                              previousCount = cleanOffers.length;
+                         }
+                     } else {
+                         // IF FAILING: Grab the raw HTML of the headless sidebar so we can fix it!
+                         if (attempts === 99) {
+                             fallbackDebugHtml = searchArea.innerHTML.substring(0, 1000); 
                          }
                      }
                      
@@ -167,7 +190,14 @@ def scrape():
             } finally {
                 const resultDiv = document.createElement('div');
                 resultDiv.id = 'extracted_offers_json';
-                resultDiv.textContent = JSON.stringify(uniqueOffers || []);
+                
+                // If it failed, output the debug HTML to n8n
+                if (uniqueOffers.length === 0) {
+                    resultDiv.textContent = JSON.stringify([{ "error": "No offers found", "debug_html": fallbackDebugHtml }]);
+                } else {
+                    resultDiv.textContent = JSON.stringify(uniqueOffers);
+                }
+                
                 document.body.appendChild(resultDiv);
             }
         })();
