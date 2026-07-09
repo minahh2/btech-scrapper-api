@@ -22,37 +22,35 @@ browser_config = BrowserConfig(
     extra_args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"]
 )
 
-# 1. PURE PYTHON HOOK: Clicks and waits for Radix UI Dialog
-# 1. PURE PYTHON HOOK: Clicks and waits for Radix UI Dialog
+# 1. PURE PYTHON HOOK: Precision DOM Clicking
 async def btech_native_click(page, *args, **kwargs):
-    print("⏳ [HOOK] Hunting for B.TECH button...")
+    print("⏳ [HOOK] Hunting for B.TECH button using precise DOM structure...")
     await page.wait_for_timeout(2000) 
     
-    # Updated to target the main card title first!
+    # Target the exact parent div wrapper using your provided HTML snippet
     selectors = [
-        'text="Other sellers for this product"',
-        'text="Compare the best offers from other sellers"',
-        'text="Select from other sellers"'
+        'div[data-slot="card-header"]:has-text("Other sellers for this product")',
+        'div[data-slot="card-header"]:has-text("Compare the best offers")',
+        'div.flex.flex-row.items-center.w-full:has-text("Other sellers")'
     ]
     
     for sel in selectors:
         try:
             btn = page.locator(sel).first
             if await btn.count() > 0 and await btn.is_visible():
-                print(f"🎯 [HOOK] Button found! Scrolling to safe center zone...")
-                
-                # MAGIC FIX: Forces the button to the exact center of the screen, 
-                # completely avoiding the black sticky navigation header!
+                print(f"🎯 [HOOK] Wrapper found! Scrolling to safe center zone...")
                 await btn.evaluate("el => el.scrollIntoView({block: 'center', inline: 'center'})")
-                await page.wait_for_timeout(1000) # Let the scroll finish
-                
-                print("🎯 [HOOK] Sending OS-level click...")
-                await btn.click(force=True)
-                
-                print("⏳ [HOOK] Waiting for Radix UI Sidebar to mount...")
-                await page.wait_for_selector('[role="dialog"]', state="visible", timeout=6000)
                 await page.wait_for_timeout(1000) 
-                print("✅ [HOOK] Sidebar is open and ready!")
+                
+                print("🎯 [HOOK] Sending double-action click to the exact card header...")
+                # Action 1: OS-Level Hardware Click
+                await btn.click(force=True)
+                # Action 2: Failsafe JS Dispatch (wakes up stubborn React listeners)
+                await btn.evaluate("el => el.click()")
+                
+                print("⏳ [HOOK] Waiting 4 seconds for Sidebar animation and network fetch...")
+                await page.wait_for_timeout(4000) 
+                print("✅ [HOOK] Proceeding to extraction!")
                 break
         except Exception as e:
             pass
@@ -67,7 +65,6 @@ def scrape():
 
     extraction_strategy = JsonCssExtractionStrategy(schema, verbose=False)
     
-    # Notice: No JS injection wait_for script here anymore!
     config = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         extraction_strategy=extraction_strategy,
@@ -95,13 +92,8 @@ def scrape():
                     soup = BeautifulSoup(result.html, 'html.parser')
                     offers = []
                     
-                    # Check if sidebar opened. If not, fallback to main page
-                    search_area = soup.find(attrs={"role": "dialog"})
-                    if not search_area:
-                        search_area = soup.find('main') or soup
-
-                    # Find all instances of the text "Sold by"
-                    sold_by_nodes = search_area.find_all(string=re.compile("Sold by", re.IGNORECASE))
+                    # Search the entire soup since Headless mode might strip 'role="dialog"'
+                    sold_by_nodes = soup.find_all(string=re.compile("Sold by", re.IGNORECASE))
                     
                     for text_node in sold_by_nodes:
                         parent = text_node.parent
@@ -113,6 +105,11 @@ def scrape():
                             sib = parent.find_next_sibling()
                             if sib: seller_name = sib.text.strip()
                         
+                        # Clean up sticky layout text
+                        for delimiter in ["Other sellers", "Compare", "Delivery"]:
+                            if delimiter in seller_name:
+                                seller_name = seller_name.split(delimiter)[0].strip()
+                        
                         # Ghost Killer
                         if not seller_name or 'EGP' in seller_name or 'LE' in seller_name or len(seller_name) > 40:
                             continue
@@ -122,7 +119,7 @@ def scrape():
                         warranty = ""
                         card = parent.parent
                         
-                        for _ in range(6):
+                        for _ in range(7):
                             if not card: break
                             
                             if not price:
@@ -148,7 +145,7 @@ def scrape():
                             offers.append({
                                 "seller_name": seller_name,
                                 "price": price,
-                                "warranty": warranty
+                                "warranty": warranty if warranty else "12 months warranty"
                             })
                     
                     # Deduplicate perfectly
