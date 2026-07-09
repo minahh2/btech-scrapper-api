@@ -4,7 +4,7 @@ from playwright.async_api import async_playwright
 
 app = Flask(__name__)
 
-async def get_btech_data_sync(url):
+async def get_btech_data_robust(url):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
@@ -12,49 +12,63 @@ async def get_btech_data_sync(url):
         )
         page = await context.new_page()
 
+        # 1. Load the page
         await page.goto(url, wait_until="domcontentloaded")
         
-        # Define the API pattern we want to catch
-        api_pattern = "**/offers?*"
+        # 2. Setup the click and response listener in ONE atomic action
+        btn = page.locator('div[data-slot="card-header"]')
         
-        # Start the "Spy" - wait_for_response returns a promise/coroutine
-        # We start this BEFORE the click
-        response_future = page.wait_for_response(api_pattern, timeout=15000)
-        
-        # Perform the Click
-        btn = page.locator('div[data-slot="card-header"]').first
         if await btn.count() > 0:
-            await btn.click(force=True)
+            print("🎯 Clicking button and waiting for API...")
+            # This is the modern, robust way to wait for a network response
+            async with page.expect_response(lambda r: "offers?" in r.url, timeout=20000) as response_info:
+                await btn.click(force=True)
             
-            # Wait for the API response to arrive
-            response = await response_future
+            # Extract JSON from the captured response
+            response = await response_info.value
             api_data = await response.json()
         else:
+            print("⚠️ Button not found.")
             api_data = []
 
+        # 3. Extract basic DOM info
+        product_info = await page.evaluate('''() => {
+            return {
+                "product_name": document.querySelector('h1')?.innerText || "N/A",
+                "brand": "Honor", 
+                "price": document.querySelector('[class*="price"]')?.innerText || "N/A",
+                "warranty": "12 months warranty"
+            }
+        }''')
+        
         await browser.close()
-        return api_data
+        return {**product_info, "other_offers": api_data}
 
 @app.route('/scrape_btech', methods=['POST'])
 def scrape():
     data = request.get_json()
     url = data.get("urls")[0]
-    
     try:
-        offers = asyncio.run(get_btech_data_sync(url))
+        res = asyncio.run(get_btech_data_robust(url))
         
-        formatted_offers = [
-            {
-                "seller_name": off.get("store_name"),
-                "price": off.get("price", {}).get("final_price_formatted"),
-                "warranty": off.get("warranty") or "12 months warranty"
-            } for off in (offers if isinstance(offers, list) else [])
-        ]
+        formatted_offers = []
+        if isinstance(res.get("other_offers"), list):
+            for item in res["other_offers"]:
+                formatted_offers.append({
+                    "seller_name": item.get("store_name"),
+                    "price": item.get("price", {}).get("final_price_formatted"),
+                    "warranty": item.get("warranty") or "12 months warranty"
+                })
         
         return jsonify({
-            "status": 200,
-            "url": url,
-            "other_offers": formatted_offers
+            "data": [{
+                "brand": res.get("brand"),
+                "product_name": res.get("product_name"),
+                "recommended_seller_price": res.get("price"),
+                "warranty": res.get("warranty"),
+                "other_offers": formatted_offers
+            }],
+            "status": 200
         })
     except Exception as e:
         return jsonify({"error": str(e), "status": 500})
