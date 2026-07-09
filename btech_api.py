@@ -1,11 +1,10 @@
 import asyncio
-import re
 from flask import Flask, request, jsonify
 from playwright.async_api import async_playwright
 
 app = Flask(__name__)
 
-async def get_btech_data_forensic(url):
+async def get_btech_data_sync(url):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
@@ -13,36 +12,52 @@ async def get_btech_data_forensic(url):
         )
         page = await context.new_page()
 
-        # Variable to store results
-        forensic_data = {"status": "No API data captured", "raw_response": ""}
-
-        # FORENSIC INTERCEPTOR: Catch the API call and look at everything
-        async def handle_api_route(route):
-            response = await route.fetch()
-            body = await response.text()
-            forensic_data["status"] = f"Code {response.status}"
-            forensic_data["raw_response"] = body
-            await route.continue_()
-
-        # Intercept the specific offers endpoint
-        await page.route("**/offers?*", handle_api_route)
-
-        # Navigate
         await page.goto(url, wait_until="domcontentloaded")
-        await asyncio.sleep(5) 
         
+        # Define the API pattern we want to catch
+        api_pattern = "**/offers?*"
+        
+        # Start the "Spy" - wait_for_response returns a promise/coroutine
+        # We start this BEFORE the click
+        response_future = page.wait_for_response(api_pattern, timeout=15000)
+        
+        # Perform the Click
+        btn = page.locator('div[data-slot="card-header"]').first
+        if await btn.count() > 0:
+            await btn.click(force=True)
+            
+            # Wait for the API response to arrive
+            response = await response_future
+            api_data = await response.json()
+        else:
+            api_data = []
+
         await browser.close()
-        return forensic_data
+        return api_data
 
 @app.route('/scrape_btech', methods=['POST'])
 def scrape():
     data = request.get_json()
     url = data.get("urls")[0]
+    
     try:
-        res = asyncio.run(get_btech_data_forensic(url))
-        return jsonify(res)
+        offers = asyncio.run(get_btech_data_sync(url))
+        
+        formatted_offers = [
+            {
+                "seller_name": off.get("store_name"),
+                "price": off.get("price", {}).get("final_price_formatted"),
+                "warranty": off.get("warranty") or "12 months warranty"
+            } for off in (offers if isinstance(offers, list) else [])
+        ]
+        
+        return jsonify({
+            "status": 200,
+            "url": url,
+            "other_offers": formatted_offers
+        })
     except Exception as e:
-        return jsonify({"error": str(e)})
+        return jsonify({"error": str(e), "status": 500})
 
 if __name__ == '__main__':
     from waitress import serve
