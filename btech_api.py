@@ -5,75 +5,44 @@ from playwright.async_api import async_playwright
 
 app = Flask(__name__)
 
-async def get_data_stealth(url):
+async def get_btech_data_forensic(url):
     async with async_playwright() as p:
-        # Launch with stealth-like arguments
-        browser = await p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
+        browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
         )
         page = await context.new_page()
 
-        # 1. Load the page (wait for critical elements only)
+        # Variable to store results
+        forensic_data = {"status": "No API data captured", "raw_response": ""}
+
+        # FORENSIC INTERCEPTOR: Catch the API call and look at everything
+        async def handle_api_route(route):
+            response = await route.fetch()
+            body = await response.text()
+            forensic_data["status"] = f"Code {response.status}"
+            forensic_data["raw_response"] = body
+            await route.continue_()
+
+        # Intercept the specific offers endpoint
+        await page.route("**/offers?*", handle_api_route)
+
+        # Navigate
         await page.goto(url, wait_until="domcontentloaded")
-        await asyncio.sleep(4) # Wait for page hydration
-        
-        # 2. Extract Product ID
-        product_id = re.search(r'/p/([a-zA-Z0-9-]+)', url).group(1)
-        api_url = f"https://retail-online-prod.btech.com/api/v1/green/discovery/api/v1/products/{product_id}/offers?city_id=31&area_id=88"
-
-        # 3. RUN FETCH INSIDE BROWSER (This inherits all legitimate browser headers/cookies)
-        api_payload = await page.evaluate(f'''async () => {{
-            try {{
-                const response = await fetch('{api_url}');
-                return await response.json();
-            }} catch (e) {{
-                return [];
-            }}
-        }}''')
-
-        # 4. Extract Main Info
-        product_info = await page.evaluate('''() => {
-            return {
-                "product_name": document.querySelector('h1')?.innerText || "N/A",
-                "brand": "Honor", 
-                "price": document.querySelector('[class*="price"]')?.innerText || "N/A",
-                "warranty": "12 months warranty"
-            }
-        }''')
+        await asyncio.sleep(5) 
         
         await browser.close()
-        return {**product_info, "offers": api_payload}
+        return forensic_data
 
 @app.route('/scrape_btech', methods=['POST'])
 def scrape():
-    url = request.get_json().get("urls")[0]
+    data = request.get_json()
+    url = data.get("urls")[0]
     try:
-        res = asyncio.run(get_data_stealth(url))
-        
-        # Handle cases where API returns error or no offers
-        raw_offers = res.get("offers") if isinstance(res.get("offers"), list) else []
-        
-        formatted_offers = [
-            {
-                "seller_name": off.get("store_name"),
-                "price": off.get("price", {}).get("final_price_formatted"),
-                "warranty": off.get("warranty") or "12 months warranty"
-            } for off in raw_offers
-        ]
-        
-        return jsonify({
-            "data": [{
-                "brand": res.get("brand"),
-                "product_name": res.get("product_name"),
-                "recommended_seller_price": res.get("price"),
-                "warranty": res.get("warranty"),
-                "other_offers": formatted_offers
-            }],
-            "status": 200
-        })
+        res = asyncio.run(get_btech_data_forensic(url))
+        return jsonify(res)
     except Exception as e:
-        return jsonify({"error": str(e), "status": 500})
+        return jsonify({"error": str(e)})
 
 if __name__ == '__main__':
     from waitress import serve
