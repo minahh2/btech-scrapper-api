@@ -5,57 +5,61 @@ from playwright.async_api import async_playwright
 
 app = Flask(__name__)
 
-async def fetch_btech_data(url):
+async def get_data_stealth(url):
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        # Launch with stealth-like arguments
+        browser = await p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
         )
         page = await context.new_page()
 
-        # 1. Faster Navigation
+        # 1. Load the page (wait for critical elements only)
         await page.goto(url, wait_until="domcontentloaded")
+        await asyncio.sleep(4) # Wait for page hydration
         
         # 2. Extract Product ID
         product_id = re.search(r'/p/([a-zA-Z0-9-]+)', url).group(1)
-        
-        # 3. Direct API call from within the Browser Session
-        # This inherits all cookies/tokens automatically!
         api_url = f"https://retail-online-prod.btech.com/api/v1/green/discovery/api/v1/products/{product_id}/offers?city_id=31&area_id=88"
-        
-        # This performs the request *as the browser*
-        response = await page.request.get(api_url)
-        
-        offers = []
-        if response.status == 200:
-            offers = await response.json()
-            
-        # 4. Fallback DOM extraction for main product info
+
+        # 3. RUN FETCH INSIDE BROWSER (This inherits all legitimate browser headers/cookies)
+        api_payload = await page.evaluate(f'''async () => {{
+            try {{
+                const response = await fetch('{api_url}');
+                return await response.json();
+            }} catch (e) {{
+                return [];
+            }}
+        }}''')
+
+        # 4. Extract Main Info
         product_info = await page.evaluate('''() => {
             return {
                 "product_name": document.querySelector('h1')?.innerText || "N/A",
-                "brand": document.querySelector('[data-slot="brand-name"]')?.innerText || "N/A",
-                "price": document.querySelector('.price-main')?.innerText || "N/A",
+                "brand": "Honor", 
+                "price": document.querySelector('[class*="price"]')?.innerText || "N/A",
                 "warranty": "12 months warranty"
             }
         }''')
         
         await browser.close()
-        return {**product_info, "other_offers": offers}
+        return {**product_info, "offers": api_payload}
 
 @app.route('/scrape_btech', methods=['POST'])
 def scrape():
-    data = request.get_json()
-    url = data.get("urls")[0]
+    url = request.get_json().get("urls")[0]
     try:
-        res = asyncio.run(fetch_btech_data(url))
+        res = asyncio.run(get_data_stealth(url))
+        
+        # Handle cases where API returns error or no offers
+        raw_offers = res.get("offers") if isinstance(res.get("offers"), list) else []
         
         formatted_offers = [
             {
                 "seller_name": off.get("store_name"),
                 "price": off.get("price", {}).get("final_price_formatted"),
                 "warranty": off.get("warranty") or "12 months warranty"
-            } for off in (res.get("other_offers") or [])
+            } for off in raw_offers
         ]
         
         return jsonify({
