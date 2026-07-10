@@ -11,12 +11,20 @@ from crawl4ai import (
 
 app = Flask(__name__)
 
-# 1. EXACTLY YOUR ORIGINAL CONFIG (Clean, no extra args)
 browser_config = BrowserConfig(
+    headless=True,
     viewport_width=1920,
     viewport_height=1080,
-    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-    user_agent_mode="random"
+    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    extra_args=[
+        "--no-sandbox", 
+        "--disable-gpu", 
+        "--disable-extensions",
+        "--disable-dev-shm-usage", 
+        "--js-flags=--max-old-space-size=512",
+        "--disable-features=IsolateOrigins,site-per-process",
+        "--disable-blink-features=AutomationControlled"
+    ]
 )
 
 _btech_session_counter = 0
