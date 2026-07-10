@@ -1,4 +1,6 @@
-flask
-crawl4ai
+Flask[async]
+crawl4ai==0.9.1
 playwright
 waitress
+playwright-stealth
+beautifulsoup4
