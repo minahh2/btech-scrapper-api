@@ -220,7 +220,7 @@ def scrape():
 
     async def run_scraper():
         async with AsyncWebCrawler(config=browser_config, verbose=True) as crawler:
-            results = await crawler.arun_many(urls=urls, config=config)
+            results = await crawler.arun_many(urls=urls, config=config, semaphore_count=3)
             output = []
             for result in results:
                 if result.success:
