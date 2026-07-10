@@ -92,13 +92,14 @@ def scrape():
                 if (el) {
                     el.scrollIntoView({ behavior: "smooth", block: "center" });
                     await delay(1000);
-                    // Prevent navigation if the button is an <a> tag
+                    
+                    // CRITICAL FIX: Stop the browser from navigating if it's a link!
+                    el.addEventListener('click', function(e) {
+                        e.preventDefault();
+                    });
                     if (el.tagName === 'A') el.removeAttribute('href');
                     
-                    const eventOpts = { bubbles: true, cancelable: true, view: window, pointerId: 1, pointerType: 'mouse' };
-                    el.dispatchEvent(new MouseEvent('click', eventOpts));
-                    if (typeof el.onclick === 'function') el.onclick();
-                    
+                    el.click();
                     await delay(1000); // Give panel time to open
                 } else {
                     const resultDiv = document.createElement('div');
@@ -200,6 +201,7 @@ def scrape():
         extraction_strategy=extraction_strategy,
         js_code=[JS_CLICK_SCRIPT],
         delay_before_return_html=0.5,
+        remove_overlay_elements=False, # VERY IMPORTANT: Prevents crawl4ai from accidentally deleting the sidebar drawer!
         excluded_tags=['nav', 'footer', 'header', 'script', 'style', 'noscript'],
         exclude_external_links=True,
         exclude_social_media_links=True,
