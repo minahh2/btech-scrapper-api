@@ -209,11 +209,15 @@ def scrape():
             output = []
             for result in results:
                 if result.success:
+                    js_res = getattr(result, "js_execution_result", "None")
+                    js_debug = str(js_res)[:500] if js_res else "None"
+                    
                     try:
                         extracted = json.loads(result.extracted_content)
                         # Ensure 'other_offers' is a JSON array instead of a string
                         if isinstance(extracted, list) and len(extracted) > 0:
                             item = extracted[0]
+                            item["js_debug"] = js_debug
                             if "other_offers" in item and isinstance(item["other_offers"], str):
                                 try:
                                     item["other_offers"] = json.loads(item["other_offers"])
@@ -221,13 +225,14 @@ def scrape():
                                     pass
                         elif isinstance(extracted, dict) and "data" in extracted and len(extracted["data"]) > 0:
                             item = extracted["data"][0]
+                            item["js_debug"] = js_debug
                             if "other_offers" in item and isinstance(item["other_offers"], str):
                                 try:
                                     item["other_offers"] = json.loads(item["other_offers"])
                                 except Exception:
                                     pass
                     except Exception:
-                        extracted = {"error": "Failed to parse extracted content"}
+                        extracted = {"error": "Failed to parse extracted content", "js_debug": js_debug}
                     output.append({
                         "url": result.url,
                         "status": result.status_code,
