@@ -47,6 +47,9 @@ def scrape():
         (async () => {
             const uniqueOffers = [];
             try {
+                const delay = ms => new Promise(res => setTimeout(res, ms));
+                await delay(2500); // CRITICAL: Wait for React hydration before clicking!
+
                 const bodyText = document.body.innerText || "";
                 const HAS_OTHER_OFFERS = bodyText.includes("Offers starting from") ||
                     bodyText.includes("Compare the best offers from other sellers") ||
@@ -61,7 +64,6 @@ def scrape():
                     return;
                 }
 
-                const delay = ms => new Promise(res => setTimeout(res, ms));
                 let targetButton = null;
                 const allElements = Array.from(document.querySelectorAll('*'));
 
@@ -90,7 +92,13 @@ def scrape():
                 if (el) {
                     el.scrollIntoView({ behavior: "smooth", block: "center" });
                     await delay(1000);
-                    el.click();
+                    // Prevent navigation if the button is an <a> tag
+                    if (el.tagName === 'A') el.removeAttribute('href');
+                    
+                    const eventOpts = { bubbles: true, cancelable: true, view: window, pointerId: 1, pointerType: 'mouse' };
+                    el.dispatchEvent(new MouseEvent('click', eventOpts));
+                    if (typeof el.onclick === 'function') el.onclick();
+                    
                     await delay(1000); // Give panel time to open
                 } else {
                     const resultDiv = document.createElement('div');
