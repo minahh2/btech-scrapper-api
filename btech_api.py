@@ -112,10 +112,13 @@ def scrape():
                 let attempts = 0;
                 let previousCount = 0;
                 let stableMatches = 0;
+                let maxCardsSeen = 0;
+                let finalDebug = "";
 
                 while (attempts < 100) {
                     const tempOffers = [];
                     const cards = document.querySelectorAll('[data-slot="card"], [data-slot="expandable-card"]');
+                    if (cards.length > maxCardsSeen) maxCardsSeen = cards.length;
 
                     cards.forEach(card => {
                         let sellerName = "";
@@ -163,6 +166,7 @@ def scrape():
                             stableMatches++;
                             if (stableMatches >= 5) {
                                 uniqueOffers.push(...cleanOffers);
+                                finalDebug = "SUCCESS: Found " + cleanOffers.length + " offers";
                                 break;
                             }
                         } else {
@@ -173,6 +177,10 @@ def scrape():
                     await delay(150);
                     attempts++;
                 }
+                
+                if (uniqueOffers.length === 0) {
+                     finalDebug = "FAILED: Loop ended. Max cards seen in DOM: " + maxCardsSeen;
+                }
             } catch (error) {
                 resolve("ERROR: " + error.toString());
             } finally {
@@ -180,7 +188,7 @@ def scrape():
                 resultDiv.id = 'extracted_offers_json';
                 resultDiv.textContent = JSON.stringify(uniqueOffers || []);
                 document.body.appendChild(resultDiv);
-                resolve("SUCCESS");
+                resolve(finalDebug);
             }
         })();
     });
