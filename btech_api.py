@@ -19,8 +19,15 @@ browser_config = BrowserConfig(
     user_agent_mode="random"
 )
 
+_btech_session_counter = 0
+def get_btech_session_id():
+    global _btech_session_counter
+    _btech_session_counter += 1
+    return f"btech_session_{_btech_session_counter // 50}"
+
 @app.route('/scrape_btech9', methods=['POST'])
 def scrape():
+    _current_session_id = get_btech_session_id()
     data = request.get_json()
     
     if not data:
@@ -181,6 +188,7 @@ def scrape():
 
     config = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
+        session_id=_current_session_id,
         extraction_strategy=extraction_strategy,
         js_code=[JS_CLICK_SCRIPT],
         delay_before_return_html=0.5,
