@@ -54,57 +54,69 @@ def scrape():
     # Modern Crawl4AI 0.9.x Page Interaction
     JS_BEFORE_WAIT = """
     return new Promise((resolve) => {
+        window.__BTECH_DEBUG = { stage: "init", matches: 0, clicked: false, fiber: false, url: window.location.href };
         setTimeout(() => {
-            const all = Array.from(document.querySelectorAll("*:not(script):not(style)"));
-            const matches = all.filter(e => (e.innerText || "").replace(/\\s+/g, " ").includes("Compare the best offers"));
-            
-            if(matches.length > 0) {
-                matches.sort((a, b) => a.querySelectorAll('*').length - b.querySelectorAll('*').length);
-                let b = matches[0];
-                let original_b = b;
+            try {
+                const all = Array.from(document.querySelectorAll("*:not(script):not(style)"));
+                const matches = all.filter(e => (e.innerText || "").replace(/\\s+/g, " ").includes("Compare the best offers"));
+                window.__BTECH_DEBUG.matches = matches.length;
                 
-                while (b && b.tagName !== 'BUTTON' && (!b.className || typeof b.className !== 'string' || !b.className.includes('cursor-pointer'))) b = b.parentElement;
-                
-                if (!b) {
-                    const candidates = Array.from(document.querySelectorAll('button, div[role="button"], .flex.justify-between, .cursor-pointer'));
-                    const specificButtons = candidates.filter(e => (e.textContent || "").replace(/\\s+/g, " ").includes("Compare the best offers"));
-                    if (specificButtons.length > 0) b = specificButtons[specificButtons.length - 1];
-                }
-                
-                if (!b) b = original_b.parentElement || original_b;
-                
-                if(b) {
-                    b.scrollIntoView();
-                    b.addEventListener('click', function(e) { e.preventDefault(); });
-                    if (b.tagName === 'A') b.removeAttribute('href');
+                if(matches.length > 0) {
+                    matches.sort((a, b) => a.querySelectorAll('*').length - b.querySelectorAll('*').length);
+                    let b = matches[0];
+                    let original_b = b;
                     
-                    const eventOpts = { bubbles: true, cancelable: true, view: window };
-                    b.dispatchEvent(new MouseEvent('click', eventOpts));
-                    b.click();
+                    while (b && b.tagName !== 'BUTTON' && (!b.className || typeof b.className !== 'string' || !b.className.includes('cursor-pointer'))) b = b.parentElement;
                     
-                    let fiberKey = Object.keys(b).find(k => k.startsWith('__reactFiber$'));
-                    if (fiberKey) {
-                        let fiber = b[fiberKey];
-                        let found = false;
-                        while (fiber && !found) {
-                            if (fiber.memoizedProps) {
-                                ['onClick', 'onPointerDown', 'onMouseDown'].forEach(h => {
-                                    if (typeof fiber.memoizedProps[h] === 'function') {
-                                        try {
-                                            fiber.memoizedProps[h]({ preventDefault: () => {}, stopPropagation: () => {}, target: b, currentTarget: b });
-                                            found = true;
-                                        } catch(e) {}
-                                    }
-                                });
+                    if (!b) {
+                        const candidates = Array.from(document.querySelectorAll('button, div[role="button"], .flex.justify-between, .cursor-pointer'));
+                        const specificButtons = candidates.filter(e => (e.textContent || "").replace(/\\s+/g, " ").includes("Compare the best offers"));
+                        if (specificButtons.length > 0) b = specificButtons[specificButtons.length - 1];
+                    }
+                    
+                    if (!b) b = original_b.parentElement || original_b;
+                    
+                    if(b) {
+                        window.__BTECH_DEBUG.button_tag = b.tagName;
+                        window.__BTECH_DEBUG.button_class = b.className;
+                        
+                        b.scrollIntoView();
+                        b.addEventListener('click', function(e) { e.preventDefault(); });
+                        if (b.tagName === 'A') b.removeAttribute('href');
+                        
+                        const eventOpts = { bubbles: true, cancelable: true, view: window };
+                        b.dispatchEvent(new MouseEvent('click', eventOpts));
+                        b.click();
+                        window.__BTECH_DEBUG.clicked = true;
+                        
+                        let fiberKey = Object.keys(b).find(k => k.startsWith('__reactFiber$'));
+                        if (fiberKey) {
+                            let fiber = b[fiberKey];
+                            let found = false;
+                            while (fiber && !found) {
+                                if (fiber.memoizedProps) {
+                                    ['onClick', 'onPointerDown', 'onMouseDown'].forEach(h => {
+                                        if (typeof fiber.memoizedProps[h] === 'function') {
+                                            try {
+                                                fiber.memoizedProps[h]({ preventDefault: () => {}, stopPropagation: () => {}, target: b, currentTarget: b });
+                                                found = true;
+                                            } catch(e) {}
+                                        }
+                                    });
+                                }
+                                fiber = fiber.return;
                             }
-                            fiber = fiber.return;
+                            window.__BTECH_DEBUG.fiber = found;
                         }
                     }
                 }
+            } catch(e) {
+                window.__BTECH_DEBUG.error = e.toString();
             }
             
             // Wait 5 seconds after click to allow API to fetch cards, regardless of layout changes!
             setTimeout(() => {
+                window.__BTECH_DEBUG.stage = "done_waiting";
                 resolve(true);
             }, 5000);
             
@@ -113,17 +125,20 @@ def scrape():
     """
 
     JS_EXTRACT_SCRIPT = """
-    const uniqueOffers = [];
+    let uniqueOffers = [];
     try {
         const bodyText = document.body.innerText || "";
         const HAS_OTHER_OFFERS = bodyText.includes("Offers starting from") ||
             bodyText.includes("Compare the best offers") ||
             bodyText.includes("Select from other sellers");
+            
+        window.__BTECH_DEBUG.has_offers_text = HAS_OTHER_OFFERS;
 
         if (HAS_OTHER_OFFERS) {
             const tempOffers = [];
             // Catch all cards everywhere, ignoring strict wrapper classes
             const cards = document.querySelectorAll('[data-slot="card"], [data-slot="expandable-card"]');
+            window.__BTECH_DEBUG.cards_found = cards.length;
             
             cards.forEach(card => {
                 let sellerName = "";
@@ -164,13 +179,20 @@ def scrape():
                     uniqueOffers.push(o);
                 }
             });
+            window.__BTECH_DEBUG.unique_offers = uniqueOffers.length;
         }
     } catch (error) {
         console.error("Extraction error", error);
+        window.__BTECH_DEBUG.extract_error = error.toString();
     } finally {
         const resultDiv = document.createElement('div');
         resultDiv.id = 'extracted_offers_json';
-        resultDiv.textContent = JSON.stringify(uniqueOffers);
+        // IF WE FOUND 0 OFFERS, SPIT OUT THE DEBUG INFO INSTEAD!
+        if (uniqueOffers.length === 0) {
+            resultDiv.textContent = JSON.stringify([{ "DEBUG_INFO": window.__BTECH_DEBUG }]);
+        } else {
+            resultDiv.textContent = JSON.stringify(uniqueOffers);
+        }
         document.body.appendChild(resultDiv);
     }
     """
