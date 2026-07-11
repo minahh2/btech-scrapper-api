@@ -54,63 +54,75 @@ def scrape():
     # Modern Crawl4AI 0.9.x Page Interaction
     JS_BEFORE_WAIT = """
     return new Promise((resolve) => {
-        window.__BTECH_DEBUG = { stage: "init", matches: 0, clicked: false, fiber: false, url: window.location.href };
+        window.__BTECH_DEBUG = { stage: "init", clicked: false, url: window.location.href };
+        
         setTimeout(() => {
+            let observer = new MutationObserver(() => {
+                const ps = Array.from(document.querySelectorAll('p')).filter(p => (p.textContent || "").includes("Sold by"));
+                if (ps.length > 1) { 
+                    window.__BTECH_DEBUG.stage = "resolved_by_observer";
+                    observer.disconnect();
+                    resolve(true);
+                }
+            });
+            observer.observe(document.body, { childList: true, subtree: true });
+            
             try {
                 const all = Array.from(document.querySelectorAll("*:not(script):not(style)"));
-                const matches = all.filter(e => (e.innerText || "").replace(/\\s+/g, " ").includes("Compare the best offers"));
-                window.__BTECH_DEBUG.matches = matches.length;
+                const matches = all.filter(e => (e.innerText || "").replace(/\s+/g, " ").includes("Compare the best offers"));
                 
                 if(matches.length > 0) {
                     const candidates = Array.from(document.querySelectorAll('button, div[role="button"], .flex.justify-between, .cursor-pointer'));
-                    const specificButtons = candidates.filter(e => (e.textContent || "").replace(/\\s+/g, " ").includes("Compare the best offers"));
+                    const specificButtons = candidates.filter(e => (e.textContent || "").replace(/\s+/g, " ").includes("Compare the best offers"));
                     
-                    if (specificButtons.length > 0) {
-                        specificButtons.forEach(b => {
-                            try {
-                                b.scrollIntoView();
-                                b.addEventListener('click', function(e) { e.preventDefault(); });
-                                if (b.tagName === 'A') b.removeAttribute('href');
-                                
-                                const eventOpts = { bubbles: true, cancelable: true, view: window };
-                                b.dispatchEvent(new MouseEvent('click', eventOpts));
-                                b.click();
-                                window.__BTECH_DEBUG.clicked = true;
-                                
-                                let fiberKey = Object.keys(b).find(k => k.startsWith('__reactFiber$'));
-                                if (fiberKey) {
-                                    let fiber = b[fiberKey];
-                                    let found = false;
-                                    while (fiber && !found) {
-                                        if (fiber.memoizedProps) {
-                                            ['onClick', 'onPointerDown', 'onMouseDown'].forEach(h => {
-                                                if (typeof fiber.memoizedProps[h] === 'function') {
-                                                    try {
-                                                        fiber.memoizedProps[h]({ preventDefault: () => {}, stopPropagation: () => {}, target: b, currentTarget: b });
-                                                        found = true;
-                                                    } catch(e) {}
-                                                }
-                                            });
+                    // ONLY click the first VISIBLE button to prevent toggling the drawer open then closed!
+                    const visibleButtons = specificButtons.filter(b => b.offsetWidth > 0 && b.offsetHeight > 0);
+                    const btnToClick = visibleButtons.length > 0 ? visibleButtons[0] : specificButtons[0];
+                    
+                    if (btnToClick) {
+                        btnToClick.scrollIntoView();
+                        btnToClick.addEventListener('click', function(e) { e.preventDefault(); });
+                        if (btnToClick.tagName === 'A') btnToClick.removeAttribute('href');
+                        
+                        const eventOpts = { bubbles: true, cancelable: true, view: window };
+                        btnToClick.dispatchEvent(new MouseEvent('click', eventOpts));
+                        btnToClick.click();
+                        window.__BTECH_DEBUG.clicked = true;
+                        
+                        let fiberKey = Object.keys(btnToClick).find(k => k.startsWith('__reactFiber$'));
+                        if (fiberKey) {
+                            let fiber = btnToClick[fiberKey];
+                            let found = false;
+                            while (fiber && !found) {
+                                if (fiber.memoizedProps) {
+                                    ['onClick', 'onPointerDown', 'onMouseDown'].forEach(h => {
+                                        if (typeof fiber.memoizedProps[h] === 'function') {
+                                            try {
+                                                fiber.memoizedProps[h]({ preventDefault: () => {}, stopPropagation: () => {}, target: btnToClick, currentTarget: btnToClick });
+                                                found = true;
+                                            } catch(e) {}
                                         }
-                                        fiber = fiber.return;
-                                    }
-                                    window.__BTECH_DEBUG.fiber = true;
+                                    });
                                 }
-                            } catch(e) {}
-                        });
+                                fiber = fiber.return;
+                            }
+                        }
                     }
                 }
             } catch(e) {
                 window.__BTECH_DEBUG.error = e.toString();
             }
             
-            // Wait 5 seconds after click to allow API to fetch cards, regardless of layout changes!
+            // Fallback timeout in case the API fails or is slow
             setTimeout(() => {
-                window.__BTECH_DEBUG.stage = "done_waiting";
-                resolve(true);
-            }, 5000);
+                if (window.__BTECH_DEBUG.stage !== "resolved_by_observer") {
+                    window.__BTECH_DEBUG.stage = "resolved_by_timeout";
+                    observer.disconnect();
+                    resolve(true);
+                }
+            }, 12000);
             
-        }, 2500);
+        }, 1500);
     });
     """
 
