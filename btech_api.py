@@ -1,47 +1,229 @@
+import os
 import json
 import asyncio
 from flask import Flask, request, jsonify
-from crawl4ai import (
-    AsyncWebCrawler,
-    CrawlerRunConfig,
-    JsonCssExtractionStrategy,
-    BrowserConfig,
-    CacheMode
-)
+from playwright.async_api import async_playwright
 
 app = Flask(__name__)
 
-browser_config = BrowserConfig(
-    headless=True,
-    viewport_width=1920,
-    viewport_height=1080,
-    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    user_data_dir="/app/chrome_cache",
-    use_persistent_context=True,
-    extra_args=[
-        "--no-sandbox", 
-        "--disable-gpu", 
-        "--disable-extensions",
-        "--disable-dev-shm-usage", 
-        "--js-flags=--max-old-space-size=512",
-        "--disable-features=IsolateOrigins,site-per-process",
-        "--disable-blink-features=AutomationControlled"
-    ]
-)
+_playwright_semaphore = asyncio.Semaphore(5)
 
-_btech_session_counter = 0
-def get_btech_session_id():
-    global _btech_session_counter
-    _btech_session_counter += 1
-    return f"btech_session_{_btech_session_counter // 50}"
+async def process_url_with_playwright(url, schema_fields):
+    async with _playwright_semaphore:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=[
+                    '--no-sandbox',
+                    '--disable-gpu',
+                    '--disable-dev-shm-usage',
+                    '--disable-blink-features=AutomationControlled'
+                ]
+            )
+            
+            context = await browser.new_context(
+                viewport={'width': 1920, 'height': 1080},
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            )
+            
+            page = await context.new_page()
+            
+            offers_data = []
+            api_caught = asyncio.Event()
+            
+            async def handle_response(response):
+                if "discovery/api/v1/products/" in response.url and "/offers" in response.url:
+                    try:
+                        json_data = await response.json()
+                        if "data" in json_data and "offers" in json_data["data"]:
+                            for offer in json_data["data"]["offers"]:
+                                seller_name = offer.get("seller", {}).get("name", "")
+                                price = str(offer.get("price", {}).get("amount", ""))
+                                warranty = offer.get("warranty", "")
+                                
+                                offers_data.append({
+                                    "seller_name": seller_name,
+                                    "price": price,
+                                    "warranty": warranty
+                                })
+                            api_caught.set()
+                    except Exception as e:
+                        pass
+                        
+            page.on("response", handle_response)
+            
+            status_code = 200
+            error_msg = ""
+            extracted_data = {}
+            
+            try:
+                response = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                status_code = response.status if response else 200
+                
+                # Try to trigger the drawer using the exact JS click that worked on the VPS
+                click_js = """
+                () => {
+                    const all = Array.from(document.querySelectorAll("*:not(script):not(style)"));
+                    const matches = all.filter(e => (e.innerText || "").replace(/\\s+/g, " ").includes("Compare the best offers"));
+                    
+                    if(matches.length > 0) {
+                        const candidates = Array.from(document.querySelectorAll('button, div[role="button"], .flex.justify-between, .cursor-pointer'));
+                        const specificButtons = candidates.filter(e => (e.textContent || "").replace(/\\s+/g, " ").includes("Compare the best offers"));
+                        
+                        const visibleButtons = specificButtons.filter(b => b.offsetWidth > 0 && b.offsetHeight > 0);
+                        const btnToClick = visibleButtons.length > 0 ? visibleButtons[0] : specificButtons[0];
+                        
+                        if (btnToClick) {
+                            btnToClick.scrollIntoView();
+                            
+                            const eventOpts = { bubbles: true, cancelable: true, view: window };
+                            btnToClick.dispatchEvent(new MouseEvent('click', eventOpts));
+                            
+                            try { btnToClick.click(); } catch(e) {}
+                            
+                            let fiberKey = Object.keys(btnToClick).find(k => k.startsWith('__reactFiber$'));
+                            if (fiberKey) {
+                                let fiber = btnToClick[fiberKey];
+                                let found = false;
+                                while (fiber && !found) {
+                                    if (fiber.memoizedProps) {
+                                        ['onClick', 'onPointerDown', 'onMouseDown'].forEach(h => {
+                                            if (typeof fiber.memoizedProps[h] === 'function') {
+                                                try {
+                                                    fiber.memoizedProps[h]({ preventDefault: () => {}, stopPropagation: () => {}, target: btnToClick, currentTarget: btnToClick });
+                                                    found = true;
+                                                } catch(e) {}
+                                            }
+                                        });
+                                    }
+                                    fiber = fiber.return;
+                                }
+                            }
+                        }
+                    }
+                }
+                """
+                try:
+                    await page.evaluate(click_js)
+                    # Wait for API response up to 5 seconds
+                    try:
+                        await asyncio.wait_for(api_caught.wait(), timeout=6.0)
+                    except asyncio.TimeoutError:
+                        await page.wait_for_timeout(4000) # Wait for DOM to render if API failed
+                except Exception:
+                    pass
+                    
+                js_extract = """
+                (fields) => {
+                    let result = {};
+                    for (const field of fields) {
+                        if (field.name === 'other_offers') continue;
+                        
+                        try {
+                            const el = document.querySelector(field.selector);
+                            if (el) {
+                                result[field.name] = (el.innerText || el.textContent || "").trim();
+                            } else {
+                                result[field.name] = "";
+                            }
+                        } catch(e) {
+                            result[field.name] = "";
+                        }
+                    }
+                    
+                    let uniqueOffers = [];
+                    try {
+                        const tempOffers = [];
+                        const soldByPs = Array.from(document.querySelectorAll('p')).filter(p => (p.textContent || "").includes("Sold by"));
+                        
+                        soldByPs.forEach(soldByP => {
+                            let sellerName = "";
+                            let price = "";
+                            let warranty = "";
+
+                            const spans = soldByP.querySelectorAll('span');
+                            if (spans.length >= 2) sellerName = spans[1].textContent.trim();
+                            else sellerName = soldByP.textContent.replace('Sold by', '').trim();
+
+                            let card = soldByP.parentElement;
+                            let currencySpan = null;
+                            while (card && card !== document.body) {
+                                const priceSpans = card.querySelectorAll('span');
+                                currencySpan = Array.from(priceSpans).find(s => {
+                                    const t = s.textContent.trim();
+                                    return t === 'LE' || t === 'EGP';
+                                });
+                                if (currencySpan) break;
+                                card = card.parentElement;
+                            }
+
+                            if (currencySpan && currencySpan.previousElementSibling) {
+                                price = currencySpan.previousElementSibling.textContent.trim();
+                            }
+
+                            if (card) {
+                                const wSpan = Array.from(card.querySelectorAll('span')).find(s => (s.textContent || "").toLowerCase().includes('warranty'));
+                                if (wSpan) warranty = wSpan.textContent.trim();
+                            }
+
+                            if (sellerName && price) {
+                                tempOffers.push({ seller_name: sellerName, price: price, warranty: warranty });
+                            }
+                        });
+
+                        const seen = new Set();
+                        tempOffers.forEach(o => {
+                            const key = o.seller_name + o.price;
+                            if (!seen.has(key)) {
+                                seen.add(key);
+                                uniqueOffers.push(o);
+                            }
+                        });
+                    } catch(e) {}
+                    
+                    result["dom_offers"] = uniqueOffers;
+                    return result;
+                }
+                """
+                extracted_data = await page.evaluate(js_extract, schema_fields)
+                
+                seen = set()
+                unique_offers = []
+                # First append API offers if any
+                for o in offers_data:
+                    key = f"{o['seller_name']}_{o['price']}"
+                    if key not in seen:
+                        seen.add(key)
+                        unique_offers.append(o)
+                # Then append DOM offers if any
+                for o in extracted_data.pop("dom_offers", []):
+                    key = f"{o['seller_name']}_{o['price']}"
+                    if key not in seen:
+                        seen.add(key)
+                        unique_offers.append(o)
+                        
+                extracted_data["other_offers"] = unique_offers
+                
+            except Exception as e:
+                error_msg = str(e)
+                status_code = 500
+                
+            finally:
+                await browser.close()
+                
+            return {
+                "url": url,
+                "status": status_code,
+                "error": error_msg,
+                "data": [extracted_data] if not error_msg else []
+            }
+
 
 @app.route('/scrape_btech9', methods=['POST'])
 def scrape():
-    _current_session_id = get_btech_session_id()
     data = request.get_json()
-    
     if not data:
-         return jsonify({"error": "No JSON payload received"}), 400
+        return jsonify({"error": "No JSON payload received"}), 400
          
     urls = data.get("urls")
     schema = data.get("schema")
@@ -49,230 +231,14 @@ def scrape():
     if not isinstance(urls, list) or not isinstance(schema, dict):
         return jsonify({"error": "Invalid input"}), 400
 
-    extraction_strategy = JsonCssExtractionStrategy(schema, verbose=True)
-    
-    # Modern Crawl4AI 0.9.x Page Interaction
-    JS_BEFORE_WAIT = """
-    return new Promise((resolve) => {
-        window.__BTECH_DEBUG = { stage: "init", clicked: false, url: window.location.href };
-        
-        setTimeout(() => {
-            let observer = new MutationObserver(() => {
-                const ps = Array.from(document.querySelectorAll('p')).filter(p => (p.textContent || "").includes("Sold by"));
-                if (ps.length > 1) { 
-                    window.__BTECH_DEBUG.stage = "resolved_by_observer";
-                    observer.disconnect();
-                    resolve(true);
-                }
-            });
-            observer.observe(document.body, { childList: true, subtree: true });
-            
-            try {
-                const all = Array.from(document.querySelectorAll("*:not(script):not(style)"));
-                const matches = all.filter(e => (e.innerText || "").replace(/\s+/g, " ").includes("Compare the best offers"));
-                
-                if(matches.length > 0) {
-                    const candidates = Array.from(document.querySelectorAll('button, div[role="button"], .flex.justify-between, .cursor-pointer'));
-                    const specificButtons = candidates.filter(e => (e.textContent || "").replace(/\s+/g, " ").includes("Compare the best offers"));
-                    
-                    // ONLY click the first VISIBLE button to prevent toggling the drawer open then closed!
-                    const visibleButtons = specificButtons.filter(b => b.offsetWidth > 0 && b.offsetHeight > 0);
-                    const btnToClick = visibleButtons.length > 0 ? visibleButtons[0] : specificButtons[0];
-                    
-                    if (btnToClick) {
-                        btnToClick.scrollIntoView();
-                        btnToClick.addEventListener('click', function(e) { e.preventDefault(); });
-                        if (btnToClick.tagName === 'A') btnToClick.removeAttribute('href');
-                        
-                        const eventOpts = { bubbles: true, cancelable: true, view: window };
-                        btnToClick.dispatchEvent(new MouseEvent('click', eventOpts));
-                        btnToClick.click();
-                        window.__BTECH_DEBUG.clicked = true;
-                        
-                        let fiberKey = Object.keys(btnToClick).find(k => k.startsWith('__reactFiber$'));
-                        if (fiberKey) {
-                            let fiber = btnToClick[fiberKey];
-                            let found = false;
-                            while (fiber && !found) {
-                                if (fiber.memoizedProps) {
-                                    ['onClick', 'onPointerDown', 'onMouseDown'].forEach(h => {
-                                        if (typeof fiber.memoizedProps[h] === 'function') {
-                                            try {
-                                                fiber.memoizedProps[h]({ preventDefault: () => {}, stopPropagation: () => {}, target: btnToClick, currentTarget: btnToClick });
-                                                found = true;
-                                            } catch(e) {}
-                                        }
-                                    });
-                                }
-                                fiber = fiber.return;
-                            }
-                        }
-                    }
-                }
-            } catch(e) {
-                window.__BTECH_DEBUG.error = e.toString();
-            }
-            
-            // Fallback timeout in case the API fails or is slow
-            setTimeout(() => {
-                if (window.__BTECH_DEBUG.stage !== "resolved_by_observer") {
-                    window.__BTECH_DEBUG.stage = "resolved_by_timeout";
-                    observer.disconnect();
-                    resolve(true);
-                }
-            }, 12000);
-            
-        }, 1500);
-    });
-    """
+    fields = schema.get("fields", [])
 
-    JS_EXTRACT_SCRIPT = """
-    let uniqueOffers = [];
-    try {
-        const bodyText = document.body.innerText || "";
-        const HAS_OTHER_OFFERS = bodyText.includes("Offers starting from") ||
-            bodyText.includes("Compare the best offers") ||
-            bodyText.includes("Select from other sellers");
-            
-        window.__BTECH_DEBUG.has_offers_text = HAS_OTHER_OFFERS;
+    async def run_all():
+        tasks = [process_url_with_playwright(url_info.get("url"), fields) for url_info in urls]
+        return await asyncio.gather(*tasks)
 
-        if (HAS_OTHER_OFFERS) {
-            const tempOffers = [];
-            
-            // Bulletproof extraction: find ALL <p> tags containing "Sold by"
-            const soldByPs = Array.from(document.querySelectorAll('p')).filter(p => (p.textContent || "").includes("Sold by"));
-            window.__BTECH_DEBUG.sold_by_ps = soldByPs.length;
-            
-            soldByPs.forEach(soldByP => {
-                let sellerName = "";
-                let price = "";
-                let warranty = "";
-
-                const spans = soldByP.querySelectorAll('span');
-                if (spans.length >= 2) sellerName = spans[1].textContent.trim();
-                else sellerName = soldByP.textContent.replace('Sold by', '').trim();
-
-                // Traverse up to find the container with the price
-                let card = soldByP.parentElement;
-                let currencySpan = null;
-                while (card && card !== document.body) {
-                    const priceSpans = card.querySelectorAll('span');
-                    currencySpan = Array.from(priceSpans).find(s => {
-                        const t = s.textContent.trim();
-                        return t === 'LE' || t === 'EGP';
-                    });
-                    if (currencySpan) break;
-                    card = card.parentElement;
-                }
-
-                if (currencySpan && currencySpan.previousElementSibling) {
-                    price = currencySpan.previousElementSibling.textContent.trim();
-                }
-
-                if (card) {
-                    const wSpan = Array.from(card.querySelectorAll('span')).find(s => (s.textContent || "").toLowerCase().includes('warranty'));
-                    if (wSpan) warranty = wSpan.textContent.trim();
-                }
-
-                if (sellerName && price) {
-                    tempOffers.push({ seller_name: sellerName, price: price, warranty: warranty });
-                }
-            });
-
-
-
-            const seen = new Set();
-            tempOffers.forEach(o => {
-                const key = o.seller_name + o.price;
-                if (!seen.has(key)) {
-                    seen.add(key);
-                    uniqueOffers.push(o);
-                }
-            });
-            window.__BTECH_DEBUG.unique_offers = uniqueOffers.length;
-        }
-    } catch (error) {
-        console.error("Extraction error", error);
-        window.__BTECH_DEBUG.extract_error = error.toString();
-    } finally {
-        const resultDiv = document.createElement('div');
-        resultDiv.id = 'extracted_offers_json';
-        // IF WE FOUND 0 OFFERS, SPIT OUT THE DEBUG INFO INSTEAD!
-        if (uniqueOffers.length === 0) {
-            resultDiv.textContent = JSON.stringify([{ "DEBUG_INFO": window.__BTECH_DEBUG }]);
-        } else {
-            resultDiv.textContent = JSON.stringify(uniqueOffers);
-        }
-        document.body.appendChild(resultDiv);
-    }
-    """
-    
-    config = CrawlerRunConfig(
-        cache_mode=CacheMode.BYPASS,
-        session_id=_current_session_id,
-        extraction_strategy=extraction_strategy,
-        js_code_before_wait=JS_BEFORE_WAIT,
-        js_code=[JS_EXTRACT_SCRIPT],
-        wait_for='js:() => true',
-        delay_before_return_html=0.5,
-        remove_overlay_elements=False,
-        excluded_tags=['nav', 'footer', 'header', 'script', 'style', 'noscript'],
-        exclude_external_links=True,
-        exclude_social_media_links=True,
-        exclude_external_images=True,
-        word_count_threshold=10,
-        magic=False 
-    )
-
-    async def run_scraper():
-        async with AsyncWebCrawler(config=browser_config, verbose=False) as crawler:
-            results = await crawler.arun_many(urls=urls, config=config, semaphore_count=3)
-            
-            output = []
-            for result in results:
-                if result.success:
-                    js_res = getattr(result, "js_execution_result", "None")
-                    js_debug = str(js_res)[:500] if js_res else "None"
-                try:
-                    extracted = json.loads(result.extracted_content)
-                    if isinstance(extracted, list) and len(extracted) > 0:
-                        item = extracted[0]
-                        item["js_debug"] = js_debug
-                        if "other_offers" in item and isinstance(item["other_offers"], str):
-                            try:
-                                item["other_offers"] = json.loads(item["other_offers"])
-                            except Exception:
-                                pass
-                    elif isinstance(extracted, dict) and "data" in extracted and len(extracted["data"]) > 0:
-                        item = extracted["data"][0]
-                        item["js_debug"] = js_debug
-                        if "other_offers" in item and isinstance(item["other_offers"], str):
-                            try:
-                                item["other_offers"] = json.loads(item["other_offers"])
-                            except Exception:
-                                pass
-                except Exception:
-                    extracted = {"error": "Failed to parse extracted content", "js_debug": js_debug}
-                
-                output.append({
-                    "url": result.url,
-                    "status": result.status_code,
-                    "data": extracted
-                })
-            else:
-                output.append({
-                    "url": result.url,
-                    "status": result.status_code,
-                    "error": result.error_message
-                })
-        return output
-    # 3. MEMORY SAFE ASYNC EXECUTION
-    try:
-        result = asyncio.run(run_scraper())
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    results = asyncio.run(run_all())
+    return jsonify(results)
 
 if __name__ == '__main__':
-    print("🚀 Starting B.TECH development server (bypassing Waitress to prevent thread deadlocks)...")
-    app.run(host='0.0.0.0', port=5002, threaded=True)
+    app.run(host='0.0.0.0', port=5002, debug=False)
