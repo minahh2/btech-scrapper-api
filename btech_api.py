@@ -62,52 +62,42 @@ def scrape():
                 window.__BTECH_DEBUG.matches = matches.length;
                 
                 if(matches.length > 0) {
-                    matches.sort((a, b) => a.querySelectorAll('*').length - b.querySelectorAll('*').length);
-                    let b = matches[0];
-                    let original_b = b;
+                    const candidates = Array.from(document.querySelectorAll('button, div[role="button"], .flex.justify-between, .cursor-pointer'));
+                    const specificButtons = candidates.filter(e => (e.textContent || "").replace(/\\s+/g, " ").includes("Compare the best offers"));
                     
-                    while (b && b.tagName !== 'BUTTON' && (!b.className || typeof b.className !== 'string' || !b.className.includes('cursor-pointer'))) b = b.parentElement;
-                    
-                    if (!b) {
-                        const candidates = Array.from(document.querySelectorAll('button, div[role="button"], .flex.justify-between, .cursor-pointer'));
-                        const specificButtons = candidates.filter(e => (e.textContent || "").replace(/\\s+/g, " ").includes("Compare the best offers"));
-                        if (specificButtons.length > 0) b = specificButtons[specificButtons.length - 1];
-                    }
-                    
-                    if (!b) b = original_b.parentElement || original_b;
-                    
-                    if(b) {
-                        window.__BTECH_DEBUG.button_tag = b.tagName;
-                        window.__BTECH_DEBUG.button_class = b.className;
-                        
-                        b.scrollIntoView();
-                        b.addEventListener('click', function(e) { e.preventDefault(); });
-                        if (b.tagName === 'A') b.removeAttribute('href');
-                        
-                        const eventOpts = { bubbles: true, cancelable: true, view: window };
-                        b.dispatchEvent(new MouseEvent('click', eventOpts));
-                        b.click();
-                        window.__BTECH_DEBUG.clicked = true;
-                        
-                        let fiberKey = Object.keys(b).find(k => k.startsWith('__reactFiber$'));
-                        if (fiberKey) {
-                            let fiber = b[fiberKey];
-                            let found = false;
-                            while (fiber && !found) {
-                                if (fiber.memoizedProps) {
-                                    ['onClick', 'onPointerDown', 'onMouseDown'].forEach(h => {
-                                        if (typeof fiber.memoizedProps[h] === 'function') {
-                                            try {
-                                                fiber.memoizedProps[h]({ preventDefault: () => {}, stopPropagation: () => {}, target: b, currentTarget: b });
-                                                found = true;
-                                            } catch(e) {}
+                    if (specificButtons.length > 0) {
+                        specificButtons.forEach(b => {
+                            try {
+                                b.scrollIntoView();
+                                b.addEventListener('click', function(e) { e.preventDefault(); });
+                                if (b.tagName === 'A') b.removeAttribute('href');
+                                
+                                const eventOpts = { bubbles: true, cancelable: true, view: window };
+                                b.dispatchEvent(new MouseEvent('click', eventOpts));
+                                b.click();
+                                window.__BTECH_DEBUG.clicked = true;
+                                
+                                let fiberKey = Object.keys(b).find(k => k.startsWith('__reactFiber$'));
+                                if (fiberKey) {
+                                    let fiber = b[fiberKey];
+                                    let found = false;
+                                    while (fiber && !found) {
+                                        if (fiber.memoizedProps) {
+                                            ['onClick', 'onPointerDown', 'onMouseDown'].forEach(h => {
+                                                if (typeof fiber.memoizedProps[h] === 'function') {
+                                                    try {
+                                                        fiber.memoizedProps[h]({ preventDefault: () => {}, stopPropagation: () => {}, target: b, currentTarget: b });
+                                                        found = true;
+                                                    } catch(e) {}
+                                                }
+                                            });
                                         }
-                                    });
+                                        fiber = fiber.return;
+                                    }
+                                    window.__BTECH_DEBUG.fiber = true;
                                 }
-                                fiber = fiber.return;
-                            }
-                            window.__BTECH_DEBUG.fiber = found;
-                        }
+                            } catch(e) {}
+                        });
                     }
                 }
             } catch(e) {
@@ -136,30 +126,46 @@ def scrape():
 
         if (HAS_OTHER_OFFERS) {
             const tempOffers = [];
-            // Catch all cards everywhere, ignoring strict wrapper classes
-            const cards = document.querySelectorAll('[data-slot="card"], [data-slot="expandable-card"]');
-            window.__BTECH_DEBUG.cards_found = cards.length;
-            window.__BTECH_DEBUG.card_texts = [];
             
-            cards.forEach(card => {
-                window.__BTECH_DEBUG.card_texts.push(card.textContent.substring(0, 100));
+            // Bulletproof extraction: find ALL <p> tags containing "Sold by"
+            const soldByPs = Array.from(document.querySelectorAll('p')).filter(p => (p.textContent || "").includes("Sold by"));
+            window.__BTECH_DEBUG.sold_by_ps = soldByPs.length;
+            
+            soldByPs.forEach(soldByP => {
                 let sellerName = "";
                 let price = "";
                 let warranty = "";
 
-                const pTags = card.querySelectorAll('p');
-                const soldByP = Array.from(pTags).find(p => (p.textContent || "").includes('Sold by'));
-                if (soldByP) {
-                    const spans = soldByP.querySelectorAll('span');
-                    if (spans.length >= 2) sellerName = spans[1].textContent.trim();
-                    else sellerName = soldByP.textContent.replace('Sold by', '').trim();
+                const spans = soldByP.querySelectorAll('span');
+                if (spans.length >= 2) sellerName = spans[1].textContent.trim();
+                else sellerName = soldByP.textContent.replace('Sold by', '').trim();
+
+                // Traverse up to find the container with the price
+                let card = soldByP.parentElement;
+                let currencySpan = null;
+                while (card && card !== document.body) {
+                    const priceSpans = card.querySelectorAll('span');
+                    currencySpan = Array.from(priceSpans).find(s => {
+                        const t = s.textContent.trim();
+                        return t === 'LE' || t === 'EGP';
+                    });
+                    if (currencySpan) break;
+                    card = card.parentElement;
                 }
 
-                const priceSpans = card.querySelectorAll('span');
-                const currencySpan = Array.from(priceSpans).find(s => {
-                    const t = s.textContent.trim();
-                    return t === 'LE' || t === 'EGP';
-                });
+                if (currencySpan && currencySpan.previousElementSibling) {
+                    price = currencySpan.previousElementSibling.textContent.trim();
+                }
+
+                if (card) {
+                    const wSpan = Array.from(card.querySelectorAll('span')).find(s => (s.textContent || "").toLowerCase().includes('warranty'));
+                    if (wSpan) warranty = wSpan.textContent.trim();
+                }
+
+                if (sellerName && price) {
+                    tempOffers.push({ seller_name: sellerName, price: price, warranty: warranty });
+                }
+            });
 
                 if (currencySpan && currencySpan.previousElementSibling) {
                     price = currencySpan.previousElementSibling.textContent.trim();
