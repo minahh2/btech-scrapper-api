@@ -53,18 +53,44 @@ def scrape():
     
     # Modern Crawl4AI 0.9.x Page Interaction
     JS_BEFORE_WAIT = """
-    const btns = Array.from(document.querySelectorAll("*")).filter(e => e.innerText && e.innerText.includes("Compare the best offers from other sellers") && e.children.length===0);
-    if(btns.length > 0) {
-        let b = btns[btns.length-1];
-        while (b && b.tagName !== 'BUTTON' && !b.className.includes('cursor-pointer')) b = b.parentElement;
-        if(b) {
-            b.scrollIntoView();
-            b.addEventListener('click', function(e) { e.preventDefault(); });
-            const eventOpts = { bubbles: true, cancelable: true, view: window };
-            b.dispatchEvent(new MouseEvent('click', eventOpts));
-            b.click();
-        }
-    }
+    return new Promise((resolve) => {
+        setTimeout(() => {
+            const btns = Array.from(document.querySelectorAll("*")).filter(e => e.innerText && e.innerText.includes("Compare the best offers from other sellers") && e.children.length===0);
+            if(btns.length > 0) {
+                let b = btns[btns.length-1];
+                while (b && b.tagName !== 'BUTTON' && !b.className.includes('cursor-pointer')) b = b.parentElement;
+                if(b) {
+                    b.scrollIntoView();
+                    b.addEventListener('click', function(e) { e.preventDefault(); });
+                    if (b.tagName === 'A') b.removeAttribute('href');
+                    
+                    const eventOpts = { bubbles: true, cancelable: true, view: window };
+                    b.dispatchEvent(new MouseEvent('click', eventOpts));
+                    b.click();
+                    
+                    let fiberKey = Object.keys(b).find(k => k.startsWith('__reactFiber$'));
+                    if (fiberKey) {
+                        let fiber = b[fiberKey];
+                        let found = false;
+                        while (fiber && !found) {
+                            if (fiber.memoizedProps) {
+                                ['onClick', 'onPointerDown', 'onMouseDown'].forEach(h => {
+                                    if (typeof fiber.memoizedProps[h] === 'function') {
+                                        try {
+                                            fiber.memoizedProps[h]({ preventDefault: () => {}, stopPropagation: () => {}, target: b, currentTarget: b });
+                                            found = true;
+                                        } catch(e) {}
+                                    }
+                                });
+                            }
+                            fiber = fiber.return;
+                        }
+                    }
+                }
+            }
+            resolve(true);
+        }, 2500);
+    });
     """
     
     JS_EXTRACT_SCRIPT = """
