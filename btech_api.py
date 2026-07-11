@@ -139,8 +139,10 @@ def scrape():
             // Catch all cards everywhere, ignoring strict wrapper classes
             const cards = document.querySelectorAll('[data-slot="card"], [data-slot="expandable-card"]');
             window.__BTECH_DEBUG.cards_found = cards.length;
+            window.__BTECH_DEBUG.card_texts = [];
             
             cards.forEach(card => {
+                window.__BTECH_DEBUG.card_texts.push(card.textContent.substring(0, 100));
                 let sellerName = "";
                 let price = "";
                 let warranty = "";
