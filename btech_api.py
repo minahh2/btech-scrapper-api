@@ -55,15 +55,19 @@ def scrape():
     JS_BEFORE_WAIT = """
     return new Promise((resolve) => {
         setTimeout(() => {
-            const btns = Array.from(document.querySelectorAll("*")).filter(e => e.innerText && e.innerText.includes("Compare the best offers from other sellers") && e.children.length===0);
-            if(btns.length > 0) {
-                let b = btns[btns.length-1];
+            const all = Array.from(document.querySelectorAll("*:not(script):not(style)"));
+            const matches = all.filter(e => (e.innerText || "").replace(/\\s+/g, " ").includes("Compare the best offers"));
+            
+            if(matches.length > 0) {
+                matches.sort((a, b) => a.querySelectorAll('*').length - b.querySelectorAll('*').length);
+                let b = matches[0];
                 let original_b = b;
-                while (b && b.tagName !== 'BUTTON' && (!b.className || !b.className.includes('cursor-pointer'))) b = b.parentElement;
+                
+                while (b && b.tagName !== 'BUTTON' && (!b.className || typeof b.className !== 'string' || !b.className.includes('cursor-pointer'))) b = b.parentElement;
                 
                 if (!b) {
                     const candidates = Array.from(document.querySelectorAll('button, div[role="button"], .flex.justify-between, .cursor-pointer'));
-                    const specificButtons = candidates.filter(e => (e.textContent || "").includes("Compare the best offers from other sellers"));
+                    const specificButtons = candidates.filter(e => (e.textContent || "").replace(/\\s+/g, " ").includes("Compare the best offers"));
                     if (specificButtons.length > 0) b = specificButtons[specificButtons.length - 1];
                 }
                 
@@ -108,7 +112,7 @@ def scrape():
     try {
         const bodyText = document.body.innerText || "";
         const HAS_OTHER_OFFERS = bodyText.includes("Offers starting from") ||
-            bodyText.includes("Compare the best offers from other sellers") ||
+            bodyText.includes("Compare the best offers") ||
             bodyText.includes("Select from other sellers");
 
         if (HAS_OTHER_OFFERS) {
@@ -120,12 +124,10 @@ def scrape():
                 let price = "";
                 let warranty = "";
 
-                const pTags = card.querySelectorAll('p');
-                const soldByP = Array.from(pTags).find(p => (p.textContent || "").includes('Sold by'));
-                if (soldByP) {
-                    const spans = soldByP.querySelectorAll('span');
-                    if (spans.length >= 2) sellerName = spans[1].textContent.trim();
-                    else sellerName = soldByP.textContent.replace('Sold by', '').trim();
+                const allTags = card.querySelectorAll('*');
+                const soldByEl = Array.from(allTags).find(el => el.children.length === 0 && (el.textContent || "").includes('Sold by'));
+                if (soldByEl) {
+                    sellerName = soldByEl.textContent.replace('Sold by', '').trim();
                 }
 
                 const priceSpans = card.querySelectorAll('span');
@@ -172,8 +174,9 @@ def scrape():
         js_code_before_wait=JS_BEFORE_WAIT,
         js_code=[JS_EXTRACT_SCRIPT],
         wait_for='''js:() => {
-            const hasBtn = Array.from(document.querySelectorAll("*")).some(e => e.innerText && e.innerText.includes("Compare the best offers from other sellers") && e.children.length===0);
-            if (!hasBtn) return true; // Don't wait if there are no other offers!
+            const all = Array.from(document.querySelectorAll("*:not(script):not(style)"));
+            const matches = all.filter(e => (e.innerText || "").replace(/\\s+/g, " ").includes("Compare the best offers"));
+            if (matches.length === 0) return true; // Don't wait if there are no other offers!
             return document.querySelectorAll('.fixed [data-slot="card"], .fixed [data-slot="expandable-card"]').length > 0;
         }''',
         delay_before_return_html=0.5,
