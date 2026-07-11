@@ -167,17 +167,7 @@ def scrape():
                 }
             });
 
-                if (currencySpan && currencySpan.previousElementSibling) {
-                    price = currencySpan.previousElementSibling.textContent.trim();
-                }
 
-                const wSpan = Array.from(priceSpans).find(s => (s.textContent || "").toLowerCase().includes('warranty'));
-                if (wSpan) warranty = wSpan.textContent.trim();
-
-                if (sellerName && price) {
-                    tempOffers.push({ seller_name: sellerName, price: price, warranty: warranty });
-                }
-            });
 
             const seen = new Set();
             tempOffers.forEach(o => {
