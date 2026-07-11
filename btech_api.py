@@ -124,10 +124,12 @@ def scrape():
                 let price = "";
                 let warranty = "";
 
-                const allTags = card.querySelectorAll('*');
-                const soldByEl = Array.from(allTags).find(el => el.children.length === 0 && (el.textContent || "").includes('Sold by'));
-                if (soldByEl) {
-                    sellerName = soldByEl.textContent.replace('Sold by', '').trim();
+                const pTags = card.querySelectorAll('p');
+                const soldByP = Array.from(pTags).find(p => (p.textContent || "").includes('Sold by'));
+                if (soldByP) {
+                    const spans = soldByP.querySelectorAll('span');
+                    if (spans.length >= 2) sellerName = spans[1].textContent.trim();
+                    else sellerName = soldByP.textContent.replace('Sold by', '').trim();
                 }
 
                 const priceSpans = card.querySelectorAll('span');
