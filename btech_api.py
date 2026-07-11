@@ -16,8 +16,6 @@ browser_config = BrowserConfig(
     viewport_width=1920,
     viewport_height=1080,
     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    user_data_dir="/app/chrome_cache_btech",
-    use_persistent_context=True,
     extra_args=[
         "--no-sandbox", 
         "--disable-gpu", 
@@ -221,46 +219,48 @@ def scrape():
     )
 
     async def run_scraper():
-        async with AsyncWebCrawler(config=browser_config, verbose=True) as crawler:
-            results = await crawler.arun_many(urls=urls, config=config, semaphore_count=3)
+        # Changed to verbose=False to prevent TTY stdout buffer deadlocks in Waitress
+        async with AsyncWebCrawler(config=browser_config, verbose=False) as crawler:
+            # Using arun for single URLs to prevent arun_many deadlocks in 0.8.7
+            url = urls[0] if urls else ""
+            result = await crawler.arun(url=url, config=config)
+            
             output = []
-            for result in results:
-                if result.success:
-                    js_res = getattr(result, "js_execution_result", "None")
-                    js_debug = str(js_res)[:500] if js_res else "None"
-                    
-                    try:
-                        extracted = json.loads(result.extracted_content)
-                        # Ensure 'other_offers' is a JSON array instead of a string
-                        if isinstance(extracted, list) and len(extracted) > 0:
-                            item = extracted[0]
-                            item["js_debug"] = js_debug
-                            if "other_offers" in item and isinstance(item["other_offers"], str):
-                                try:
-                                    item["other_offers"] = json.loads(item["other_offers"])
-                                except Exception:
-                                    pass
-                        elif isinstance(extracted, dict) and "data" in extracted and len(extracted["data"]) > 0:
-                            item = extracted["data"][0]
-                            item["js_debug"] = js_debug
-                            if "other_offers" in item and isinstance(item["other_offers"], str):
-                                try:
-                                    item["other_offers"] = json.loads(item["other_offers"])
-                                except Exception:
-                                    pass
-                    except Exception:
-                        extracted = {"error": "Failed to parse extracted content", "js_debug": js_debug}
-                    output.append({
-                        "url": result.url,
-                        "status": result.status_code,
-                        "data": extracted
-                    })
-                else:
-                    output.append({
-                        "url": result.url,
-                        "status": result.status_code,
-                        "error": result.error_message
-                    })
+            if result.success:
+                js_res = getattr(result, "js_execution_result", "None")
+                js_debug = str(js_res)[:500] if js_res else "None"
+                try:
+                    extracted = json.loads(result.extracted_content)
+                    if isinstance(extracted, list) and len(extracted) > 0:
+                        item = extracted[0]
+                        item["js_debug"] = js_debug
+                        if "other_offers" in item and isinstance(item["other_offers"], str):
+                            try:
+                                item["other_offers"] = json.loads(item["other_offers"])
+                            except Exception:
+                                pass
+                    elif isinstance(extracted, dict) and "data" in extracted and len(extracted["data"]) > 0:
+                        item = extracted["data"][0]
+                        item["js_debug"] = js_debug
+                        if "other_offers" in item and isinstance(item["other_offers"], str):
+                            try:
+                                item["other_offers"] = json.loads(item["other_offers"])
+                            except Exception:
+                                pass
+                except Exception:
+                    extracted = {"error": "Failed to parse extracted content", "js_debug": js_debug}
+                
+                output.append({
+                    "url": result.url,
+                    "status": result.status_code,
+                    "data": extracted
+                })
+            else:
+                output.append({
+                    "url": result.url,
+                    "status": result.status_code,
+                    "error": result.error_message
+                })
             return output
 
     # 3. MEMORY SAFE ASYNC EXECUTION
