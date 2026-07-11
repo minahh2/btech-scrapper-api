@@ -248,21 +248,20 @@ def scrape():
                             except Exception:
                                 pass
                 except Exception:
-                        extracted = {"error": "Failed to parse extracted content", "js_debug": js_debug}
-                    
-                    output.append({
-                        "url": result.url,
-                        "status": result.status_code,
-                        "data": extracted
-                    })
-                else:
-                    output.append({
-                        "url": result.url,
-                        "status": result.status_code,
-                        "error": result.error_message
-                    })
-            return output
-
+                    extracted = {"error": "Failed to parse extracted content", "js_debug": js_debug}
+                
+                output.append({
+                    "url": result.url,
+                    "status": result.status_code,
+                    "data": extracted
+                })
+            else:
+                output.append({
+                    "url": result.url,
+                    "status": result.status_code,
+                    "error": result.error_message
+                })
+        return output
     # 3. MEMORY SAFE ASYNC EXECUTION
     try:
         result = asyncio.run(run_scraper())
