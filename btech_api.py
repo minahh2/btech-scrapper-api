@@ -67,12 +67,79 @@ def scrape():
     }
     """
     
+    JS_EXTRACT_SCRIPT = """
+    const uniqueOffers = [];
+    try {
+        const bodyText = document.body.innerText || "";
+        const HAS_OTHER_OFFERS = bodyText.includes("Offers starting from") ||
+            bodyText.includes("Compare the best offers from other sellers") ||
+            bodyText.includes("Select from other sellers");
+
+        if (HAS_OTHER_OFFERS) {
+            const tempOffers = [];
+            const cards = document.querySelectorAll('[data-slot="card"], [data-slot="expandable-card"]');
+            
+            cards.forEach(card => {
+                let sellerName = "";
+                let price = "";
+                let warranty = "";
+
+                const pTags = card.querySelectorAll('p');
+                const soldByP = Array.from(pTags).find(p => (p.textContent || "").includes('Sold by'));
+                if (soldByP) {
+                    const spans = soldByP.querySelectorAll('span');
+                    if (spans.length >= 2) sellerName = spans[1].textContent.trim();
+                    else sellerName = soldByP.textContent.replace('Sold by', '').trim();
+                }
+
+                const priceSpans = card.querySelectorAll('span');
+                const currencySpan = Array.from(priceSpans).find(s => {
+                    const t = s.textContent.trim();
+                    return t === 'LE' || t === 'EGP';
+                });
+
+                if (currencySpan && currencySpan.previousElementSibling) {
+                    price = currencySpan.previousElementSibling.textContent.trim();
+                }
+
+                const wSpan = Array.from(priceSpans).find(s => (s.textContent || "").toLowerCase().includes('warranty'));
+                if (wSpan) warranty = wSpan.textContent.trim();
+
+                if (sellerName && price) {
+                    tempOffers.push({ seller_name: sellerName, price: price, warranty: warranty });
+                }
+            });
+
+            const seen = new Set();
+            tempOffers.forEach(o => {
+                const key = o.seller_name + o.price;
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    uniqueOffers.push(o);
+                }
+            });
+        }
+    } catch (error) {
+        console.error("Extraction error", error);
+    } finally {
+        const resultDiv = document.createElement('div');
+        resultDiv.id = 'extracted_offers_json';
+        resultDiv.textContent = JSON.stringify(uniqueOffers);
+        document.body.appendChild(resultDiv);
+    }
+    """
+    
     config = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         session_id=_current_session_id,
         extraction_strategy=extraction_strategy,
         js_code_before_wait=JS_BEFORE_WAIT,
-        wait_for='''js:() => document.querySelectorAll('[data-slot="card"], [data-slot="expandable-card"]').length > 0''',
+        js_code=[JS_EXTRACT_SCRIPT],
+        wait_for='''js:() => {
+            const hasBtn = Array.from(document.querySelectorAll("*")).some(e => e.innerText && e.innerText.includes("Compare the best offers from other sellers") && e.children.length===0);
+            if (!hasBtn) return true; // Don't wait if there are no other offers!
+            return document.querySelectorAll('.fixed [data-slot="card"], .fixed [data-slot="expandable-card"]').length > 0;
+        }''',
         delay_before_return_html=0.5,
         remove_overlay_elements=False,
         excluded_tags=['nav', 'footer', 'header', 'script', 'style', 'noscript'],
