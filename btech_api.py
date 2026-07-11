@@ -102,11 +102,16 @@ def scrape():
                     }
                 }
             }
-            resolve(true);
+            
+            // Wait 5 seconds after click to allow API to fetch cards, regardless of layout changes!
+            setTimeout(() => {
+                resolve(true);
+            }, 5000);
+            
         }, 2500);
     });
     """
-    
+
     JS_EXTRACT_SCRIPT = """
     const uniqueOffers = [];
     try {
@@ -117,6 +122,7 @@ def scrape():
 
         if (HAS_OTHER_OFFERS) {
             const tempOffers = [];
+            // Catch all cards everywhere, ignoring strict wrapper classes
             const cards = document.querySelectorAll('[data-slot="card"], [data-slot="expandable-card"]');
             
             cards.forEach(card => {
@@ -175,12 +181,7 @@ def scrape():
         extraction_strategy=extraction_strategy,
         js_code_before_wait=JS_BEFORE_WAIT,
         js_code=[JS_EXTRACT_SCRIPT],
-        wait_for='''js:() => {
-            const all = Array.from(document.querySelectorAll("*:not(script):not(style)"));
-            const matches = all.filter(e => (e.innerText || "").replace(/\\s+/g, " ").includes("Compare the best offers"));
-            if (matches.length === 0) return true; // Don't wait if there are no other offers!
-            return document.querySelectorAll('.fixed [data-slot="card"], .fixed [data-slot="expandable-card"]').length > 0;
-        }''',
+        wait_for='js:() => true',
         delay_before_return_html=0.5,
         remove_overlay_elements=False,
         excluded_tags=['nav', 'footer', 'header', 'script', 'style', 'noscript'],
