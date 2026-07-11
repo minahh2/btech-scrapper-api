@@ -58,7 +58,17 @@ def scrape():
             const btns = Array.from(document.querySelectorAll("*")).filter(e => e.innerText && e.innerText.includes("Compare the best offers from other sellers") && e.children.length===0);
             if(btns.length > 0) {
                 let b = btns[btns.length-1];
-                while (b && b.tagName !== 'BUTTON' && !b.className.includes('cursor-pointer')) b = b.parentElement;
+                let original_b = b;
+                while (b && b.tagName !== 'BUTTON' && (!b.className || !b.className.includes('cursor-pointer'))) b = b.parentElement;
+                
+                if (!b) {
+                    const candidates = Array.from(document.querySelectorAll('button, div[role="button"], .flex.justify-between, .cursor-pointer'));
+                    const specificButtons = candidates.filter(e => (e.textContent || "").includes("Compare the best offers from other sellers"));
+                    if (specificButtons.length > 0) b = specificButtons[specificButtons.length - 1];
+                }
+                
+                if (!b) b = original_b.parentElement || original_b;
+                
                 if(b) {
                     b.scrollIntoView();
                     b.addEventListener('click', function(e) { e.preventDefault(); });
