@@ -58,19 +58,22 @@ async def process_url_with_playwright(url, schema_fields):
                 extracted_data = {}
                 
                 try:
-                    response = await page.goto(url, wait_until="networkidle", timeout=30000)
+                    response = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
                     status_code = response.status if response else 200
                     
                     try:
                         button = page.locator("text=Compare the best offers").first
                         try:
-                            await button.wait_for(state="visible", timeout=5000)
+                            await button.wait_for(state="attached", timeout=5000)
+                            await button.scroll_into_view_if_needed()
+                            # Give React a tiny bit of time to attach the onClick handler
+                            await page.wait_for_timeout(1000)
                             await button.click(timeout=3000)
                             try:
                                 await asyncio.wait_for(api_caught.wait(), timeout=6.0)
                             except asyncio.TimeoutError:
                                 pass
-                        except Exception as e:
+                        except Exception:
                             pass
                     except Exception:
                         pass
