@@ -76,16 +76,21 @@ async def process_url_with_playwright(url, schema_fields):
                         await button.wait_for(state="attached", timeout=5000)
                         debug_info["button_found"] = True
                         
-                        # Use force=True to bypass overlapping chat widgets.
-                        # The ultra-tall viewport (5000px) ensures it is never "outside the viewport".
-                        await button.click(force=True, timeout=3000)
-                        debug_info["button_clicked"] = True
-                        
-                        try:
-                            await asyncio.wait_for(api_caught.wait(), timeout=6.0)
-                            debug_info["api_caught"] = True
-                        except asyncio.TimeoutError:
+                        # Handle React Hydration Delay: Click repeatedly until the API fires.
+                        # The ultra-tall viewport ensures the button is never "outside the viewport".
+                        for i in range(10):
+                            await button.click(force=True, timeout=3000)
+                            debug_info["button_clicked"] = True
+                            try:
+                                await asyncio.wait_for(api_caught.wait(), timeout=1.5)
+                                debug_info["api_caught"] = True
+                                break  # Success!
+                            except asyncio.TimeoutError:
+                                pass # Not hydrated yet, loop and click again
+                                
+                        if not api_caught.is_set():
                             debug_info["api_timeout"] = True
+                            
                     except Exception as e:
                         debug_info["button_error"] = str(e)
                 except Exception as e:
