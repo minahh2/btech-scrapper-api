@@ -35,10 +35,13 @@ async def run_diagnostic():
             report["vps_environment_test"]["browser_launch"] = "SUCCESS"
             
             context = await browser.new_context(
-                viewport={'width': 1920, 'height': 5000},
+                viewport={'width': 1280, 'height': 720},
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
             )
             page = await context.new_page()
+
+            # BLOCK MEDIA/CSS TO PREVENT VPS OOM CRASH!
+            await page.route("**/*.{png,jpg,jpeg,webp,gif,svg,woff2,woff,ttf,css,mp4,webm}", lambda route: route.abort())
 
             # Listeners
             page.on("console", lambda msg: report["console_logs"].append({"type": msg.type, "text": msg.text}))
@@ -72,6 +75,10 @@ async def run_diagnostic():
                 
             print("[*] Waiting 5 seconds for React Hydration...")
             await asyncio.sleep(5)
+            
+            print("[*] Taking initial screenshot...")
+            await page.screenshot(path="btech_vps_screenshot.png", full_page=True)
+            report["vps_environment_test"]["screenshot_taken"] = "btech_vps_screenshot.png"
             
             print("[*] Analyzing DOM for button...")
             button = page.locator("text=Compare the best offers").first
