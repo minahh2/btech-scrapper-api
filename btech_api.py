@@ -17,8 +17,9 @@ async def process_url_with_playwright(url, schema_fields):
                 ]
             )
             
+            # ULTRA-TALL VIEWPORT: 5000px height means no scrolling needed, bypassing all "outside viewport" errors!
             context = await browser.new_context(
-                viewport={'width': 1920, 'height': 1080},
+                viewport={'width': 1920, 'height': 5000},
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
             )
             
@@ -70,29 +71,23 @@ async def process_url_with_playwright(url, schema_fields):
                 debug_info["goto_time"] = round(time.time() - start_time, 2)
                 
                 try:
-                    js_click = """
-                    () => {
-                        const el = document.evaluate("//*[contains(text(), 'Compare the best offers')]", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-                        if (el) {
-                            let curr = el;
-                            while (curr && curr !== document.body) {
-                                curr.click();
-                                curr = curr.parentElement;
-                            }
-                            return true;
-                        }
-                        return false;
-                    }
-                    """
-                    found = await page.evaluate(js_click)
-                    debug_info["button_found"] = found
-                    debug_info["button_clicked"] = found
-                    if found:
+                    button = page.locator("text=Compare the best offers").first
+                    try:
+                        await button.wait_for(state="attached", timeout=5000)
+                        debug_info["button_found"] = True
+                        
+                        # Use force=True to bypass overlapping chat widgets.
+                        # The ultra-tall viewport (5000px) ensures it is never "outside the viewport".
+                        await button.click(force=True, timeout=3000)
+                        debug_info["button_clicked"] = True
+                        
                         try:
                             await asyncio.wait_for(api_caught.wait(), timeout=6.0)
                             debug_info["api_caught"] = True
                         except asyncio.TimeoutError:
                             debug_info["api_timeout"] = True
+                    except Exception as e:
+                        debug_info["button_error"] = str(e)
                 except Exception as e:
                     debug_info["locator_error"] = str(e)
                     
