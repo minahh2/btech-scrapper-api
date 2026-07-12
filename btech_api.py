@@ -70,20 +70,29 @@ async def process_url_with_playwright(url, schema_fields):
                 debug_info["goto_time"] = round(time.time() - start_time, 2)
                 
                 try:
-                    button = page.locator("text=Compare the best offers").first
-                    try:
-                        await button.wait_for(state="attached", timeout=5000)
-                        debug_info["button_found"] = True
-                        # Use force=True to bypass overlap but still trigger React synthetic events
-                        await button.click(force=True, timeout=3000)
-                        debug_info["button_clicked"] = True
+                    js_click = """
+                    () => {
+                        const el = document.evaluate("//*[contains(text(), 'Compare the best offers')]", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+                        if (el) {
+                            let curr = el;
+                            while (curr && curr !== document.body) {
+                                curr.click();
+                                curr = curr.parentElement;
+                            }
+                            return true;
+                        }
+                        return false;
+                    }
+                    """
+                    found = await page.evaluate(js_click)
+                    debug_info["button_found"] = found
+                    debug_info["button_clicked"] = found
+                    if found:
                         try:
                             await asyncio.wait_for(api_caught.wait(), timeout=6.0)
                             debug_info["api_caught"] = True
                         except asyncio.TimeoutError:
                             debug_info["api_timeout"] = True
-                    except Exception as e:
-                        debug_info["button_error"] = str(e)
                 except Exception as e:
                     debug_info["locator_error"] = str(e)
                     
