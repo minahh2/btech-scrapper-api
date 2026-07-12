@@ -242,7 +242,10 @@ def scrape():
     fields = schema.get("fields", [])
 
     async def run_all():
-        tasks = [process_url_with_playwright(url_info.get("url"), fields) for url_info in urls]
+        tasks = []
+        for u in urls:
+            url_str = u.get("url") if isinstance(u, dict) else u
+            tasks.append(process_url_with_playwright(url_str, fields))
         return await asyncio.gather(*tasks)
 
     results = asyncio.run(run_all())
