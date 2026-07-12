@@ -36,14 +36,14 @@ async def process_url_with_playwright(url, schema_fields):
                     if "discovery/api/v1/products/" in response.url and "/offers" in response.url:
                         try:
                             json_data = await response.json()
-                            if "data" in json_data and "offers" in json_data["data"]:
-                                for offer in json_data["data"]["offers"]:
-                                    seller_name = offer.get("seller", {}).get("name", "")
-                                    price = str(offer.get("price", {}).get("amount", ""))
-                                    warranty = offer.get("warranty", "")
+                            if isinstance(json_data, list):
+                                for offer in json_data:
+                                    seller_name = offer.get("store_name", "")
+                                    price = str(offer.get("price", {}).get("final_price_formatted", ""))
+                                    warranty = offer.get("warranty", "") or ""
                                     
                                     offers_data.append({
-                                        "seller_name": seller_name,
+                                        "seller_name": f"Sold by {seller_name}" if seller_name else "",
                                         "price": price,
                                         "warranty": warranty
                                     })
@@ -58,59 +58,20 @@ async def process_url_with_playwright(url, schema_fields):
                 extracted_data = {}
                 
                 try:
-                    response = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    response = await page.goto(url, wait_until="networkidle", timeout=30000)
                     status_code = response.status if response else 200
                     
-                    # Try to trigger the drawer using the exact JS click that worked on the VPS
-                    click_js = """
-                    () => {
-                        const all = Array.from(document.querySelectorAll("*:not(script):not(style)"));
-                        const matches = all.filter(e => (e.innerText || "").replace(/\\s+/g, " ").includes("Compare the best offers"));
-                        
-                        if(matches.length > 0) {
-                            const candidates = Array.from(document.querySelectorAll('button, div[role="button"], .flex.justify-between, .cursor-pointer'));
-                            const specificButtons = candidates.filter(e => (e.textContent || "").replace(/\\s+/g, " ").includes("Compare the best offers"));
-                            
-                            const visibleButtons = specificButtons.filter(b => b.offsetWidth > 0 && b.offsetHeight > 0);
-                            const btnToClick = visibleButtons.length > 0 ? visibleButtons[0] : specificButtons[0];
-                            
-                            if (btnToClick) {
-                                btnToClick.scrollIntoView();
-                                
-                                const eventOpts = { bubbles: true, cancelable: true, view: window };
-                                btnToClick.dispatchEvent(new MouseEvent('click', eventOpts));
-                                
-                                try { btnToClick.click(); } catch(e) {}
-                                
-                                let fiberKey = Object.keys(btnToClick).find(k => k.startsWith('__reactFiber$'));
-                                if (fiberKey) {
-                                    let fiber = btnToClick[fiberKey];
-                                    let found = false;
-                                    while (fiber && !found) {
-                                        if (fiber.memoizedProps) {
-                                            ['onClick', 'onPointerDown', 'onMouseDown'].forEach(h => {
-                                                if (typeof fiber.memoizedProps[h] === 'function') {
-                                                    try {
-                                                        fiber.memoizedProps[h]({ preventDefault: () => {}, stopPropagation: () => {}, target: btnToClick, currentTarget: btnToClick });
-                                                        found = true;
-                                                    } catch(e) {}
-                                                }
-                                            });
-                                        }
-                                        fiber = fiber.return;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    """
                     try:
-                        await page.evaluate(click_js)
-                        # Wait for API response up to 5 seconds
+                        button = page.locator("text=Compare the best offers").first
                         try:
-                            await asyncio.wait_for(api_caught.wait(), timeout=6.0)
-                        except asyncio.TimeoutError:
-                            await page.wait_for_timeout(4000) # Wait for DOM to render if API failed
+                            await button.wait_for(state="visible", timeout=5000)
+                            await button.click(timeout=3000)
+                            try:
+                                await asyncio.wait_for(api_caught.wait(), timeout=6.0)
+                            except asyncio.TimeoutError:
+                                pass
+                        except Exception as e:
+                            pass
                     except Exception:
                         pass
                         
@@ -188,22 +149,23 @@ async def process_url_with_playwright(url, schema_fields):
                     """
                     extracted_data = await page.evaluate(js_extract, schema_fields)
                     
+                    if offers_data:
+                        unique_offers = offers_data
+                    else:
+                        unique_offers = extracted_data.pop("dom_offers", [])
+                        
+                    # Deduplicate just in case
+                    final_offers = []
                     seen = set()
-                    unique_offers = []
-                    # First append API offers if any
-                    for o in offers_data:
-                        key = f"{o['seller_name']}_{o['price']}"
+                    for o in unique_offers:
+                        # Normalize key
+                        raw_seller = o['seller_name'].lower().replace("sold by", "").strip()
+                        key = f"{raw_seller}_{o['price']}"
                         if key not in seen:
                             seen.add(key)
-                            unique_offers.append(o)
-                    # Then append DOM offers if any
-                    for o in extracted_data.pop("dom_offers", []):
-                        key = f"{o['seller_name']}_{o['price']}"
-                        if key not in seen:
-                            seen.add(key)
-                            unique_offers.append(o)
+                            final_offers.append(o)
                             
-                    extracted_data["other_offers"] = unique_offers
+                    extracted_data["other_offers"] = final_offers
                     
                 except Exception as e:
                     error_msg = str(e)
