@@ -71,28 +71,37 @@ async def process_url_with_playwright(url, schema_fields):
                 debug_info["goto_time"] = round(time.time() - start_time, 2)
                 
                 try:
-                    button = page.locator("text=Compare the best offers").first
-                    try:
-                        await button.wait_for(state="attached", timeout=5000)
-                        debug_info["button_found"] = True
-                        
-                        # Handle React Hydration Delay: Click repeatedly until the API fires.
-                        # The ultra-tall viewport ensures the button is never "outside the viewport".
-                        for i in range(10):
-                            await button.click(force=True, timeout=3000)
-                            debug_info["button_clicked"] = True
-                            try:
-                                await asyncio.wait_for(api_caught.wait(), timeout=1.5)
-                                debug_info["api_caught"] = True
-                                break  # Success!
-                            except asyncio.TimeoutError:
-                                pass # Not hydrated yet, loop and click again
-                                
-                        if not api_caught.is_set():
-                            debug_info["api_timeout"] = True
+                    js_click = """
+                    () => {
+                        const el = document.evaluate("//*[contains(text(), 'Compare the best offers')]", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+                        if (el) {
+                            let curr = el;
+                            while (curr && curr !== document.body) {
+                                curr.click();
+                                curr = curr.parentElement;
+                            }
+                            return true;
+                        }
+                        return false;
+                    }
+                    """
+                    
+                    # Handle React Hydration Delay: Execute the JS Bubbler repeatedly until the API fires.
+                    for i in range(10):
+                        found = await page.evaluate(js_click)
+                        debug_info["button_clicked"] = found
+                        try:
+                            await asyncio.wait_for(api_caught.wait(), timeout=1.5)
+                            debug_info["api_caught"] = True
+                            break  # Success!
+                        except asyncio.TimeoutError:
+                            pass # Not hydrated yet, loop and execute JS again
                             
-                    except Exception as e:
-                        debug_info["button_error"] = str(e)
+                    if not api_caught.is_set():
+                        debug_info["api_timeout"] = True
+                        
+                except Exception as e:
+                    debug_info["button_error"] = str(e)
                 except Exception as e:
                     debug_info["locator_error"] = str(e)
                     
