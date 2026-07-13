@@ -164,8 +164,18 @@ async def fetch_btech_data(url: str):
             await browser.close()
 
 
+import threading
+
+# Global lock to prevent multiple concurrent scraping jobs (prevents OOM on VPS)
+scrape_lock = threading.Lock()
+
 @app.route('/scrape', methods=['POST'])
 def scrape_btech():
+    # Only allow one request at a time to save RAM on the VPS
+    acquired = scrape_lock.acquire(timeout=120)  # Wait up to 2 minutes for the lock
+    if not acquired:
+        return jsonify([{"status": 429, "url": request.json.get('url', ''), "data": [], "error": "Server is busy processing another request."}]), 429
+        
     try:
         data = request.json
         url = data.get('url')
@@ -175,8 +185,10 @@ def scrape_btech():
             
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(fetch_btech_data(url))
-        loop.close()
+        try:
+            result = loop.run_until_complete(fetch_btech_data(url))
+        finally:
+            loop.close()
 
         return jsonify([{
             "status": 200,
@@ -188,10 +200,13 @@ def scrape_btech():
         logging.error(f"Error during scrape: {e}")
         return jsonify([{
             "status": 500,
-            "url": request.json.get('url', ''),
+            "url": request.json.get('url', '') if request.json else '',
             "data": [],
             "error": str(e)
         }]), 500
+    finally:
+        scrape_lock.release()
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8001, debug=True)
+    # Use threaded=False to prevent Flask from processing multiple requests concurrently
+    app.run(host="0.0.0.0", port=8001, debug=False, threaded=False)
