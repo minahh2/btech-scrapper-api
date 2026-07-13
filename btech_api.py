@@ -188,4 +188,4 @@ def scrape_btech():
 
 if __name__ == "__main__":
     # Completely thread-safe since we are using requests!
-    app.run(host="0.0.0.0", port=8001, debug=False, threaded=True)
+    app.run(host="0.0.0.0", port=5002, debug=False, threaded=True)
