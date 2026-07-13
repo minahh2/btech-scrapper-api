@@ -2,5 +2,6 @@ Flask[async]
 crawl4ai==0.9.1
 playwright
 waitress
-playwright-stealth
+requests
+requests-toolbelt
 beautifulsoup4
