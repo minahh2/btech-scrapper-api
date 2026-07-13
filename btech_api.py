@@ -164,8 +164,14 @@ def fetch_btech_data(url: str):
 def scrape_btech():
     try:
         data = request.json
-        url = data.get('urls')
+        # Handle both 'url' and 'urls', and handle if 'urls' is a list
+        url_input = data.get('urls') or data.get('url')
         
+        if isinstance(url_input, list):
+            url = url_input[0] if url_input else ""
+        else:
+            url = url_input
+            
         if not url:
             return jsonify([{"status": 400, "url": "", "data": [], "error": "URL is required"}]), 400
             
