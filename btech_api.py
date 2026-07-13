@@ -164,7 +164,7 @@ def fetch_btech_data(url: str):
 def scrape_btech():
     try:
         data = request.json
-        url = data.get('url')
+        url = data.get('urls')
         
         if not url:
             return jsonify([{"status": 400, "url": "", "data": [], "error": "URL is required"}]), 400
