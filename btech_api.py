@@ -1,6 +1,4 @@
 from flask import Flask, request, jsonify
-from playwright.async_api import async_playwright
-import asyncio
 from bs4 import BeautifulSoup
 import re
 import json
@@ -12,175 +10,158 @@ import time
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-def extract_offers_via_api(url, jwt_token):
-    match = re.search(r'/p/([^/?]+)', url)
-    if not match:
-        return []
-    product_id = match.group(1)
-    
-    api_url = f"https://retail-online-prod.btech.com/api/v1/green/discovery/api/v1/products/{product_id}/offers?city_id=31&area_id=88"
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Origin": "https://btech.com",
-        "Referer": "https://btech.com/",
-        "Authorization": f"Bearer {jwt_token}",
+def fetch_btech_data(url: str):
+    debug_info = {
+        "jwt_found": False,
+        "api_offers_count": 0,
+        "html_fetch_time": 0,
+        "api_fetch_time": 0,
+        "total_time": 0
     }
     
+    start_total = time.time()
+    
+    session = requests.Session()
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1"
+    }
+
+    # 1. Fetch HTML to get the JWT Cookie and product info
+    start_html = time.time()
     try:
-        response = requests.get(api_url, headers=headers, timeout=15)
-        if response.status_code == 200:
-            return response.json()
+        response = session.get(url, headers=headers, timeout=15)
+        response.raise_for_status()
     except Exception as e:
-        logging.error(f"Error fetching API directly: {e}")
+        logging.error(f"Error fetching HTML: {e}")
+        raise Exception(f"Failed to fetch B.TECH HTML: {str(e)}")
         
-    return []
+    debug_info["html_fetch_time"] = round(time.time() - start_html, 2)
 
-async def fetch_btech_data(url: str):
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=[
-                '--no-sandbox',
-                '--disable-gpu',
-                '--disable-dev-shm-usage',
-                '--disable-blink-features=AutomationControlled',
-                '--js-flags="--max-old-space-size=128"', # Limit V8 RAM to 128MB
-                '--disable-extensions',
-                '--disable-setuid-sandbox',
-                '--no-zygote',
-                '--single-process' # Saves huge memory overhead
-            ]
-        )
-        context = await browser.new_context(
-            viewport={'width': 800, 'height': 600},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-        )
-        page = await context.new_page()
-        
-        await page.route("**/*.{png,jpg,jpeg,webp,gif,svg,woff2,woff,ttf,css,mp4,webm}", lambda route: route.abort())
+    # 2. Extract JWT
+    jwt_token = None
+    for c in session.cookies:
+        if c.name == 'btech-auth-session':
+            try:
+                decoded_val = urllib.parse.unquote(c.value)
+                auth_data = json.loads(decoded_val)
+                jwt_token = auth_data.get("JWT")
+                break
+            except Exception as e:
+                logging.error(f"Error parsing cookie: {e}")
 
-        debug_info = {
-            "jwt_found": False,
-            "api_offers_count": 0,
-            "goto_time": 0
+    # 3. Extract Product ID from URL
+    match = re.search(r'/p/([^/?]+)', url)
+    product_id = match.group(1) if match else None
+
+    # 4. Fetch API data if JWT is found
+    api_offers_data = []
+    if jwt_token and product_id:
+        debug_info["jwt_found"] = True
+        api_url = f"https://retail-online-prod.btech.com/api/v1/green/discovery/api/v1/products/{product_id}/offers?city_id=31&area_id=88"
+        api_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Origin": "https://btech.com",
+            "Referer": "https://btech.com/",
+            "Authorization": f"Bearer {jwt_token}",
         }
-
+        
+        start_api = time.time()
         try:
-            start_time = time.time()
-            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            debug_info["goto_time"] = round(time.time() - start_time, 2)
+            api_response = session.get(api_url, headers=api_headers, timeout=10)
+            if api_response.status_code == 200:
+                api_offers_data = api_response.json()
+                debug_info["api_offers_count"] = len(api_offers_data)
+        except Exception as e:
+            logging.error(f"Error fetching API directly: {e}")
             
-            cookies = await context.cookies()
-            jwt_token = None
-            for c in cookies:
-                if c['name'] == 'btech-auth-session':
-                    try:
-                        decoded_val = urllib.parse.unquote(c['value'])
-                        auth_data = json.loads(decoded_val)
-                        jwt_token = auth_data.get("JWT")
-                        break
-                    except Exception as e:
-                        logging.error(f"Error parsing cookie: {e}")
+        debug_info["api_fetch_time"] = round(time.time() - start_api, 2)
 
-            api_offers_data = []
-            if jwt_token:
-                debug_info["jwt_found"] = True
-                api_offers_data = extract_offers_via_api(url, jwt_token)
-                if api_offers_data:
-                    debug_info["api_offers_count"] = len(api_offers_data)
+    # 5. Parse HTML with BeautifulSoup
+    soup = BeautifulSoup(response.text, 'html.parser')
+    
+    product_name = ""
+    brand = ""
+    recommended_seller_name = ""
+    recommended_seller_price = ""
 
-            html = await page.content()
-            soup = BeautifulSoup(html, 'html.parser')
+    h1 = soup.find('h1')
+    if h1:
+        product_name = h1.text.strip()
+        try:
+            brand = product_name.split()[0]
+        except:
+            pass
+
+    seller_divs = soup.find_all('div', class_='flex flex-row items-center gap-2')
+    for div in seller_divs:
+        if "Sold by" in div.text:
+            recommended_seller_name = div.text.strip()
+            break
+
+    price_spans = soup.find_all('span', class_='text-bukra-price')
+    for span in price_spans:
+        if "EGP" in span.text:
+            recommended_seller_price = span.text.replace("EGP", "").strip()
+            break
             
-            product_name = ""
-            brand = ""
-            recommended_seller_name = ""
-            recommended_seller_price = ""
+    if not recommended_seller_price:
+         price_wrapper = soup.find('div', class_=lambda c: c and 'price' in c.lower())
+         if price_wrapper:
+             match = re.search(r'([\d,]+)\s*EGP', price_wrapper.text)
+             if match:
+                 recommended_seller_price = match.group(1).strip()
 
-            h1 = soup.find('h1')
-            if h1:
-                product_name = h1.text.strip()
-                try:
-                    brand = product_name.split()[0]
-                except:
-                    pass
-
-            seller_divs = soup.find_all('div', class_='flex flex-row items-center gap-2')
-            for div in seller_divs:
-                if "Sold by" in div.text:
-                    recommended_seller_name = div.text.strip()
-                    break
-
-            price_spans = soup.find_all('span', class_='text-bukra-price')
-            for span in price_spans:
-                if "EGP" in span.text:
-                    recommended_seller_price = span.text.replace("EGP", "").strip()
-                    break
-                    
-            if not recommended_seller_price:
-                 price_wrapper = soup.find('div', class_=lambda c: c and 'price' in c.lower())
-                 if price_wrapper:
-                     match = re.search(r'([\d,]+)\s*EGP', price_wrapper.text)
-                     if match:
-                         recommended_seller_price = match.group(1).strip()
-
-            other_offers = []
-            for item in api_offers_data:
-                try:
-                    price_val = item.get("price", {}).get("final_price_formatted", "")
-                    if not price_val:
-                        price_val = str(item.get("price", {}).get("final_price", ""))
-                    
-                    offer = {
-                        "seller_name": "Sold by " + item.get("seller_name", ""),
-                        "price": price_val,
-                        "positive_reviews": "",
-                        "rating": "",
-                        "delivery_time": item.get("delivery_date", ""),
-                        "is_fulfilled_by_btech": item.get("is_fulfilled_by_btech", False),
-                        "warranty": item.get("warranty", "")
-                    }
-                    other_offers.append(offer)
-                except Exception as e:
-                    logging.error(f"Error parsing offer item: {e}")
-
-            data = {
-                "product_name": product_name,
-                "brand": brand,
-                "recommended_seller_price": recommended_seller_price,
-                "recommended_seller_name": recommended_seller_name,
-                "recommended_seller_rating": "",
-                "recommended_seller_positive_reviews": "",
-                "extra_disc": "",
-                "warranty": "12 months warranty",
-                "is_seller_amazon": "",
-                "ratings_count": "",
+    # 6. Parse API Offers
+    other_offers = []
+    for item in api_offers_data:
+        try:
+            price_val = item.get("price", {}).get("final_price_formatted", "")
+            if not price_val:
+                price_val = str(item.get("price", {}).get("final_price", ""))
+            
+            offer = {
+                "seller_name": "Sold by " + item.get("seller_name", ""),
+                "price": price_val,
+                "positive_reviews": "",
                 "rating": "",
-                "number_of_other_offers": str(len(other_offers)) if other_offers else "",
-                "other_offers": other_offers,
-                "DEBUG_INFO": debug_info
+                "delivery_time": item.get("delivery_date", ""),
+                "is_fulfilled_by_btech": item.get("is_fulfilled_by_btech", False),
+                "warranty": item.get("warranty", "")
             }
+            other_offers.append(offer)
+        except Exception as e:
+            logging.error(f"Error parsing offer item: {e}")
 
-            return data
+    debug_info["total_time"] = round(time.time() - start_total, 2)
 
-        finally:
-            await browser.close()
+    data = {
+        "product_name": product_name,
+        "brand": brand,
+        "recommended_seller_price": recommended_seller_price,
+        "recommended_seller_name": recommended_seller_name,
+        "recommended_seller_rating": "",
+        "recommended_seller_positive_reviews": "",
+        "extra_disc": "",
+        "warranty": "12 months warranty",
+        "is_seller_amazon": "",
+        "ratings_count": "",
+        "rating": "",
+        "number_of_other_offers": str(len(other_offers)) if other_offers else "",
+        "other_offers": other_offers,
+        "DEBUG_INFO": debug_info
+    }
 
+    return data
 
-import threading
-
-# Global lock to prevent multiple concurrent scraping jobs (prevents OOM on VPS)
-scrape_lock = threading.Lock()
 
 @app.route('/scrape', methods=['POST'])
 def scrape_btech():
-    # Only allow one request at a time to save RAM on the VPS
-    acquired = scrape_lock.acquire(timeout=120)  # Wait up to 2 minutes for the lock
-    if not acquired:
-        return jsonify([{"status": 429, "url": request.json.get('url', ''), "data": [], "error": "Server is busy processing another request."}]), 429
-        
     try:
         data = request.json
         url = data.get('url')
@@ -188,13 +169,7 @@ def scrape_btech():
         if not url:
             return jsonify([{"status": 400, "url": "", "data": [], "error": "URL is required"}]), 400
             
-        try:
-            # Use asyncio.run which safely handles the event loop cleanup
-            result = asyncio.run(fetch_btech_data(url))
-        except Exception as e:
-            logging.error(f"Asyncio run error: {e}")
-            raise e
-
+        result = fetch_btech_data(url)
 
         return jsonify([{
             "status": 200,
@@ -210,9 +185,7 @@ def scrape_btech():
             "data": [],
             "error": str(e)
         }]), 500
-    finally:
-        scrape_lock.release()
 
 if __name__ == "__main__":
-    # Use threaded=False to prevent Flask from processing multiple requests concurrently
-    app.run(host="0.0.0.0", port=8001, debug=False, threaded=False)
+    # Completely thread-safe since we are using requests!
+    app.run(host="0.0.0.0", port=8001, debug=False, threaded=True)
