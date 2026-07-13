@@ -21,12 +21,10 @@ def fetch_btech_data(url: str):
     
     start_total = time.time()
     
-    import random
-    import time
-    
     # 0. Protective Jitter: Wait 2-4 seconds before fetching anything
     # This guarantees that even if n8n sends requests back-to-back quickly,
     # we enforce a safe rate-limit so the new IP never gets banned by AWS!
+    import random
     time.sleep(random.uniform(2.0, 4.0))
     
     session = requests.Session()
@@ -100,49 +98,86 @@ def fetch_btech_data(url: str):
             
         debug_info["api_fetch_time"] = round(time.time() - start_api, 2)
 
-    # 5. Parse HTML with BeautifulSoup
+    # 5. Load Schema and Parse HTML with BeautifulSoup
+    schema = {
+        "schema": {
+            "name": "BtechProductSchema",
+            "baseSelector": "body",
+            "fields": [
+                {"name": "product_name", "selector": "h1.font-regular.text-small.text-absolute-dark", "type": "text"},
+                {"name": "brand", "selector": "p.font-medium.text-secondary-supportive-d2.text-xsmall", "type": "text"},
+                {"name": "rating", "selector": "[id='acrPopover'] span span a [class='a-size-small a-color-base']", "type": "text"},
+                {"name": "ratings_count", "selector": "[id='acrCustomerReviewText']", "type": "text"},
+                {"name": "recommended_seller_price", "selector": "span.font-semibold.text-medium", "type": "text"},
+                {"name": "recommended_seller_name", "selector": "div.flex.flex-col.divide-y > div.py-large:last-of-type p", "type": "text"},
+                {"name": "recommended_seller_rating", "selector": "#aod-pinned-offer .a-icon-alt", "type": "text"},
+                {"name": "is_seller_amazon", "selector": "div.w-fit.flex.gap-small.items-center font-medium.rounded-full.bg-neutral-l4.text-absolute-dark.px-xsmall.py-3xsmall.text-xsmall", "type": "text"},
+                {"name": "extra_disc", "selector": "[class='flex items-center w-full gap-3xsmall'] [class='font-medium text-xxsmall text-successD1 line-clamp-1 text-start']", "type": "text"},
+                {"name": "recommended_seller_positive_reviews", "selector": "#aod-pinned-offer [id^='seller-rating-count-'] span", "type": "text"},
+                {"name": "warranty", "selector": "div.flex.items-center.justify-between.py-large.gap-small p.flex.gap-2xsmall", "type": "text"},
+                {"name": "number_of_other_offers", "selector": "div.px-small.pt-small.flex.justify-between.items-center span.text-xsmall.font-medium.text-secondarySupportiveD3", "type": "text"},
+                {"name": "other_offers", "selector": "#extracted_offers_json", "type": "text"}
+            ]
+        }
+    }
+    
     soup = BeautifulSoup(response.text, 'html.parser')
     
-    product_name = ""
-    brand = ""
-    recommended_seller_name = ""
-    recommended_seller_price = ""
-
-    h1 = soup.find('h1')
-    if h1:
-        product_name = h1.text.strip()
-        try:
-            brand = product_name.split()[0]
-        except:
-            pass
-
-    seller_divs = soup.find_all('div', class_='flex flex-row items-center gap-2')
-    for div in seller_divs:
-        if "Sold by" in div.text:
-            recommended_seller_name = div.text.strip()
-            break
-
-    price_spans = soup.find_all('span', class_='text-bukra-price')
-    for span in price_spans:
-        if "EGP" in span.text:
-            recommended_seller_price = span.text.replace("EGP", "").strip()
-            break
+    extracted_data = {}
+    
+    # Dynamically extract every field based on the user's schema selectors
+    for field in schema.get('schema', {}).get('fields', []):
+        field_name = field['name']
+        selector = field['selector']
+        
+        # We handle other_offers separately since it comes from the API
+        if field_name in ["other_offers", "number_of_other_offers"]:
+            continue
             
-    if not recommended_seller_price:
-         price_wrapper = soup.find('div', class_=lambda c: c and 'price' in c.lower())
-         if price_wrapper:
-             match = re.search(r'([\d,]+)\s*EGP', price_wrapper.text)
-             if match:
-                 recommended_seller_price = match.group(1).strip()
+        element = soup.select_one(selector)
+        extracted_data[field_name] = element.text.strip() if element else ""
+        
+    # Fallback to basic HTML extraction if schema selectors fail (e.g. they are Amazon selectors)
+    if not extracted_data.get('product_name'):
+        h1 = soup.find('h1')
+        extracted_data['product_name'] = h1.text.strip() if h1 else ""
+        
+    if not extracted_data.get('brand') and extracted_data.get('product_name'):
+        extracted_data['brand'] = extracted_data['product_name'].split()[0]
+        
+    if not extracted_data.get('recommended_seller_price'):
+        price_spans = soup.find_all('span', class_='text-bukra-price')
+        for span in price_spans:
+            if "EGP" in span.text:
+                extracted_data['recommended_seller_price'] = span.text.replace("EGP", "").strip()
+                break
+        if not extracted_data.get('recommended_seller_price'):
+            price_wrapper = soup.find('div', class_=lambda c: c and 'price' in c.lower())
+            if price_wrapper:
+                 match = re.search(r'([\d,]+)\s*EGP', price_wrapper.text)
+                 if match:
+                     extracted_data['recommended_seller_price'] = match.group(1).strip()
+                     
+    if not extracted_data.get('recommended_seller_name'):
+        seller_divs = soup.find_all('div', class_='flex flex-row items-center gap-2')
+        for div in seller_divs:
+            if "Sold by" in div.text:
+                extracted_data['recommended_seller_name'] = div.text.strip()
+                break
 
-    # 6. Parse API Offers
+    # 6. Parse API Offers and extract dynamic warranty
     other_offers = []
+    api_warranty = ""
     for item in api_offers_data:
         try:
             price_val = item.get("price", {}).get("final_price_formatted", "")
             if not price_val:
                 price_val = str(item.get("price", {}).get("final_price", ""))
             
+            offer_warranty = item.get("warranty") or ""
+            if offer_warranty and not api_warranty:
+                api_warranty = offer_warranty  # Grab the first available warranty from API
+                
             offer = {
                 "seller_name": "Sold by " + item.get("seller_name", ""),
                 "price": price_val,
@@ -150,26 +185,31 @@ def fetch_btech_data(url: str):
                 "rating": "",
                 "delivery_time": item.get("delivery_date", ""),
                 "is_fulfilled_by_btech": item.get("is_fulfilled_by_btech", False),
-                "warranty": item.get("warranty", "")
+                "warranty": offer_warranty
             }
             other_offers.append(offer)
         except Exception as e:
             logging.error(f"Error parsing offer item: {e}")
+            
+    # If the schema selector didn't find a warranty in HTML, use the one from the API!
+    if not extracted_data.get("warranty") and api_warranty:
+        extracted_data["warranty"] = api_warranty
 
     debug_info["total_time"] = round(time.time() - start_total, 2)
 
+    # Combine everything perfectly matching the schema
     data = {
-        "product_name": product_name,
-        "brand": brand,
-        "recommended_seller_price": recommended_seller_price,
-        "recommended_seller_name": recommended_seller_name,
-        "recommended_seller_rating": "",
-        "recommended_seller_positive_reviews": "",
-        "extra_disc": "",
-        "warranty": "12 months warranty",
-        "is_seller_amazon": "",
-        "ratings_count": "",
-        "rating": "",
+        "product_name": extracted_data.get("product_name", ""),
+        "brand": extracted_data.get("brand", ""),
+        "rating": extracted_data.get("rating", ""),
+        "ratings_count": extracted_data.get("ratings_count", ""),
+        "recommended_seller_price": extracted_data.get("recommended_seller_price", ""),
+        "recommended_seller_name": extracted_data.get("recommended_seller_name", ""),
+        "recommended_seller_rating": extracted_data.get("recommended_seller_rating", ""),
+        "is_seller_amazon": extracted_data.get("is_seller_amazon", ""),
+        "extra_disc": extracted_data.get("extra_disc", ""),
+        "recommended_seller_positive_reviews": extracted_data.get("recommended_seller_positive_reviews", ""),
+        "warranty": extracted_data.get("warranty", ""),
         "number_of_other_offers": str(len(other_offers)) if other_offers else "",
         "other_offers": other_offers,
         "DEBUG_INFO": debug_info
