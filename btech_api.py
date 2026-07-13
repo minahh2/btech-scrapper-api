@@ -45,7 +45,12 @@ async def fetch_btech_data(url: str):
                 '--no-sandbox',
                 '--disable-gpu',
                 '--disable-dev-shm-usage',
-                '--disable-blink-features=AutomationControlled'
+                '--disable-blink-features=AutomationControlled',
+                '--js-flags="--max-old-space-size=128"', # Limit V8 RAM to 128MB
+                '--disable-extensions',
+                '--disable-setuid-sandbox',
+                '--no-zygote',
+                '--single-process' # Saves huge memory overhead
             ]
         )
         context = await browser.new_context(
@@ -183,12 +188,13 @@ def scrape_btech():
         if not url:
             return jsonify([{"status": 400, "url": "", "data": [], "error": "URL is required"}]), 400
             
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
         try:
-            result = loop.run_until_complete(fetch_btech_data(url))
-        finally:
-            loop.close()
+            # Use asyncio.run which safely handles the event loop cleanup
+            result = asyncio.run(fetch_btech_data(url))
+        except Exception as e:
+            logging.error(f"Asyncio run error: {e}")
+            raise e
+
 
         return jsonify([{
             "status": 200,
