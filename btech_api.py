@@ -28,15 +28,6 @@ def fetch_btech_data(url: str):
     time.sleep(random.uniform(2.0, 4.0))
     
     session = requests.Session()
-    
-    try:
-        from requests_toolbelt.adapters.source import SourceAddressAdapter
-        NEW_IP = "69.164.242.174"
-        new_ip_adapter = SourceAddressAdapter(NEW_IP)
-        session.mount("http://", new_ip_adapter)
-        session.mount("https://", new_ip_adapter)
-    except ImportError:
-        logging.warning("requests_toolbelt not installed. Using default IP. Run 'pip install requests-toolbelt' to fix.")
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
