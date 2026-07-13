@@ -17,6 +17,8 @@ RUN python -m playwright install --with-deps chromium
 
 COPY btech_api.py .
 
+COPY btech_diagnostic.py .
+
 EXPOSE 5002
 ENTRYPOINT ["/usr/bin/dumb-init", "--"]
 CMD ["python", "btech_api.py"]
