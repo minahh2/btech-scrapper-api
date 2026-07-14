@@ -5,3 +5,4 @@ waitress
 requests
 requests-toolbelt
 beautifulsoup4
+curl-cffi
