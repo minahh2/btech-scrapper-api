@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify
-import requests
+from curl_cffi import requests
 from bs4 import BeautifulSoup
 import time
 import random
@@ -36,12 +36,11 @@ def fetch_btech_simple(url):
     start_total = time.time()
 
     # Small random jitter to prevent basic rate limits
-    time.sleep(random.uniform(1.0, 2.5))
+    time.sleep(random.uniform(0.5, 1.5))
     
-    session = requests.Session()
+    session = requests.Session(impersonate="chrome120")
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.5",
         "Connection": "keep-alive",
