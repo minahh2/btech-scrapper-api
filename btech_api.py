@@ -35,8 +35,8 @@ def fetch_btech_simple(url):
     debug_info = {}
     start_total = time.time()
 
-    # Small random jitter to prevent basic rate limits
-    time.sleep(random.uniform(0.5, 1.5))
+    # Tiny random jitter just to be safe
+    time.sleep(random.uniform(0.1, 0.4))
     
     session = requests.Session(impersonate="chrome120")
 
