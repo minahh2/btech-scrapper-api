@@ -126,7 +126,7 @@ def scrape_btech():
             url = url_input
             
         if not url:
-            return jsonify([{"status": 400, "url": "", "data": [], "error": "URL is required"}]), 400
+            return jsonify([{"status": 400, "url": "", "data": [], "error": "URL is required"}]), 200
             
         result = fetch_btech_simple(url)
 
@@ -143,7 +143,7 @@ def scrape_btech():
             "url": request.json.get('url', '') if request.json else '',
             "data": [],
             "error": str(e)
-        }]), 500
+        }]), 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5002, debug=False, threaded=True)
