@@ -156,4 +156,4 @@ def scrape():
 if __name__ == '__main__':
     from waitress import serve
     print("Starting B.TECH CFFI production server with Waitress on port 5002 (Max 8 threads)...")
-    serve(app, host='0.0.0.0', port=5002, threads=8)
+    serve(app, host='0.0.0.0', port=5002, threads=3)
