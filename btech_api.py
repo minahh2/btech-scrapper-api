@@ -2,148 +2,158 @@ from flask import Flask, request, jsonify
 from curl_cffi import requests
 from bs4 import BeautifulSoup
 import time
-import random
 import logging
+import json
+import urllib.parse
 import re
 
-# Setup minimal logging
 logging.basicConfig(level=logging.INFO)
-
 app = Flask(__name__)
 
-# Hardcoded schema for B.TECH to avoid file read errors in Docker
-BTECH_SCHEMA = {
-    "name": "BtechProductSchema",
-    "baseSelector": "body",
-    "fields": [
-        {"name": "product_name", "selector": "h1.font-regular.text-small.text-absolute-dark", "type": "text"},
-        {"name": "brand", "selector": "p.font-medium.text-secondary-supportive-d2.text-xsmall", "type": "text"},
-        {"name": "rating", "selector": "[id='acrPopover'] span span a [class='a-size-small a-color-base']", "type": "text"},
-        {"name": "ratings_count", "selector": "[id='acrCustomerReviewText']", "type": "text"},
-        {"name": "recommended_seller_price", "selector": "span.font-semibold.text-medium", "type": "text"},
-        {"name": "recommended_seller_name", "selector": "div.flex.flex-col.divide-y > div.py-large:last-of-type p", "type": "text"},
-        {"name": "recommended_seller_rating", "selector": "#aod-pinned-offer .a-icon-alt", "type": "text"},
-        {"name": "is_seller_amazon", "selector": "div.w-fit.flex.gap-small.items-center font-medium.rounded-full.bg-neutral-l4.text-absolute-dark.px-xsmall.py-3xsmall.text-xsmall", "type": "text"},
-        {"name": "extra_disc", "selector": "[class='flex items-center w-full gap-3xsmall'] [class='font-medium text-xxsmall text-successD1 line-clamp-1 text-start']", "type": "text"},
-        {"name": "recommended_seller_positive_reviews", "selector": "#aod-pinned-offer [id^='seller-rating-count-'] span", "type": "text"},
-        {"name": "warranty", "selector": "div.flex.items-center.justify-between.py-large.gap-small p.flex.gap-2xsmall", "type": "text"},
-        {"name": "number_of_other_offers", "selector": "div.px-small.pt-small.flex.justify-between.items-center span.text-xsmall.font-medium.text-secondarySupportiveD3", "type": "text"}
-    ]
-}
+def extract_data(soup, schema):
+    result = {}
+    for field in schema.get('fields', []):
+        if field.get('type') == 'text':
+            elements = soup.select(field.get('selector', ''))
+            if elements:
+                result[field['name']] = elements[0].get_text(strip=True)
+            else:
+                result[field['name']] = None
+        elif field.get('type') == 'list':
+            list_results = []
+            elements = soup.select(field.get('selector', ''))
+            for element in elements:
+                item_data = {}
+                for subfield in field.get('fields', []):
+                    sub_elements = element.select(subfield.get('selector', ''))
+                    if sub_elements:
+                        item_data[subfield['name']] = sub_elements[0].get_text(strip=True)
+                    else:
+                        item_data[subfield['name']] = None
+                list_results.append(item_data)
+            result[field['name']] = list_results
+    return result
 
-def fetch_btech_simple(url):
-    debug_info = {}
-    start_total = time.time()
-
-    # Tiny random jitter just to be safe
-    time.sleep(random.uniform(0.1, 0.4))
-    
-    session = requests.Session(impersonate="chrome120")
-
-    headers = {
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1"
-    }
-
-    start_html = time.time()
-    response = session.get(url, headers=headers, timeout=15)
-    debug_info["html_fetch_time"] = round(time.time() - start_html, 2)
-    response.raise_for_status()
-
-    # Parse HTML
-    soup = BeautifulSoup(response.text, 'html.parser')
-    extracted_data = {}
-    
-    # Dynamically extract every field exactly matching the schema
-    for field in BTECH_SCHEMA['fields']:
-        field_name = field['name']
-        selector = field['selector']
-        element = soup.select_one(selector)
-        extracted_data[field_name] = element.text.strip() if element else ""
-        
-    # Basic fallbacks for critical fields just in case the CSS selectors miss
-    if not extracted_data.get('product_name'):
-        h1 = soup.find('h1')
-        extracted_data['product_name'] = h1.text.strip() if h1 else ""
-        
-    if not extracted_data.get('brand') and extracted_data.get('product_name'):
-        extracted_data['brand'] = extracted_data['product_name'].split()[0]
-        
-    if not extracted_data.get('recommended_seller_price'):
-        price_spans = soup.find_all('span', class_='text-bukra-price')
-        for span in price_spans:
-            if "EGP" in span.text:
-                extracted_data['recommended_seller_price'] = span.text.replace("EGP", "").strip()
-                break
-        if not extracted_data.get('recommended_seller_price'):
-            price_wrapper = soup.find('div', class_=lambda c: c and 'price' in c.lower())
-            if price_wrapper:
-                 match = re.search(r'([\d,]+)\s*EGP', price_wrapper.text)
-                 if match:
-                     extracted_data['recommended_seller_price'] = match.group(1).strip()
-                     
-    if not extracted_data.get('recommended_seller_name'):
-        seller_divs = soup.find_all('div', class_='flex flex-row items-center gap-2')
-        for div in seller_divs:
-            if "Sold by" in div.text:
-                extracted_data['recommended_seller_name'] = div.text.strip()
-                break
-
-    debug_info["total_time"] = round(time.time() - start_total, 2)
-
-    # Combine everything perfectly matching the schema (excluding other_offers)
-    data = {
-        "product_name": extracted_data.get("product_name", ""),
-        "brand": extracted_data.get("brand", ""),
-        "rating": extracted_data.get("rating", ""),
-        "ratings_count": extracted_data.get("ratings_count", ""),
-        "recommended_seller_price": extracted_data.get("recommended_seller_price", ""),
-        "recommended_seller_name": extracted_data.get("recommended_seller_name", ""),
-        "recommended_seller_rating": extracted_data.get("recommended_seller_rating", ""),
-        "is_seller_amazon": extracted_data.get("is_seller_amazon", ""),
-        "extra_disc": extracted_data.get("extra_disc", ""),
-        "recommended_seller_positive_reviews": extracted_data.get("recommended_seller_positive_reviews", ""),
-        "warranty": extracted_data.get("warranty", ""),
-        "number_of_other_offers": extracted_data.get("number_of_other_offers", ""),
-        "other_offers": [],  # INTENTIONALLY BLANK to maximize performance and avoid AWS bans
-        "DEBUG_INFO": debug_info
-    }
-
-    return data
-
+def extract_product_id(url):
+    try:
+        # e.g., https://btech.com/en/p/5cdab7d8-9613-4ac8-b869-451d8960521b/something
+        return url.split('/p/')[1].split('/')[0].split('?')[0]
+    except Exception:
+        return None
 
 @app.route('/scrape', methods=['POST'])
-def scrape_btech():
-    try:
-        data = request.json
-        url_input = data.get('urls') or data.get('url')
-        
-        if isinstance(url_input, list):
-            url = url_input[0] if url_input else ""
-        else:
-            url = url_input
-            
-        if not url:
-            return jsonify([{"status": 400, "url": "", "data": [], "error": "URL is required"}]), 200
-            
-        result = fetch_btech_simple(url)
+def scrape():
+    data = request.get_json()
+    if not data:
+         return jsonify({"error": "No JSON payload received"}), 400
+         
+    urls = data.get("urls")
+    schema = data.get("schema")
 
-        return jsonify([{
-            "status": 200,
-            "url": url,
-            "data": [result],
-            "error": ""
-        }])
-    except Exception as e:
-        logging.error(f"Error during scrape: {e}")
-        return jsonify([{
-            "status": 500,
-            "url": request.json.get('url', '') if request.json else '',
-            "data": [],
-            "error": str(e)
-        }]), 200
+    if not isinstance(urls, list) or not isinstance(schema, dict):
+        return jsonify({"error": "Invalid input. 'urls' must be a list, 'schema' must be a dict."}), 400
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5002, debug=False, threaded=True)
+    results = []
+    
+    # We create a single persistent session which is amazing for anti-bot
+    session = requests.Session(impersonate="chrome120")
+    
+    for url in urls:
+        try:
+            logging.info(f"Fetching {url}")
+            
+            # 1. Fetch main HTML page to get the schema fields and the Auth Cookie
+            res = session.get(url, timeout=15)
+            
+            if res.status_code == 200:
+                soup = BeautifulSoup(res.text, 'html.parser')
+                extracted_data = extract_data(soup, schema)
+                
+                # 2. Extract JWT token from the newly assigned cookie
+                jwt_token = None
+                auth_cookie = session.cookies.get('btech-auth-session')
+                if auth_cookie:
+                    try:
+                        decoded_cookie = urllib.parse.unquote(auth_cookie)
+                        jwt_token = json.loads(decoded_cookie).get('JWT')
+                    except Exception as e:
+                        logging.warning(f"Could not parse auth cookie: {e}")
+                
+                # 3. If we have the token, hit the internal API!
+                sellers_found = []
+                product_id = extract_product_id(url)
+                
+                if jwt_token and product_id:
+                    logging.info("JWT Token found, hitting internal offers API...")
+                    api_url = f"https://retail-online-prod.btech.com/api/v1/green/discovery/api/v1/products/{product_id}/offers?city_id=31&area_id=88"
+                    
+                    headers = {
+                        'Accept': 'application/json',
+                        'Accept-Language': 'en',
+                        'Authorization': f'Bearer {jwt_token}',
+                        'Origin': 'https://btech.com',
+                        'Referer': url,
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                    
+                    api_res = session.get(api_url, headers=headers, timeout=10)
+                    if api_res.status_code == 200:
+                        try:
+                            offers_data = api_res.json()
+                            for offer in offers_data:
+                                seller = offer.get('seller_name', 'Unknown')
+                                price_val = offer.get('price', {}).get('final_price_formatted', 'Unknown')
+                                price = f"EGP {price_val}" if price_val != 'Unknown' else "Unknown"
+                                
+                                # B.TECH doesn't provide seller ratings in this JSON, so we default to N/A
+                                sellers_found.append({
+                                    "seller_name": seller,
+                                    "price": price,
+                                    "rating": "N/A"
+                                })
+                            logging.info(f"Successfully extracted {len(sellers_found)} offers from API!")
+                        except Exception as e:
+                            logging.error(f"Error parsing API JSON: {e}")
+                    else:
+                        logging.warning(f"Offers API returned status {api_res.status_code}")
+                
+                # 4. Integrate offers into extracted_data
+                if sellers_found:
+                    main_seller = extracted_data.get('recommended_seller_name', '')
+                    # Optional: filter out the main seller
+                    if main_seller:
+                        sellers_found = [s for s in sellers_found if s['seller_name'] != main_seller]
+                        
+                    extracted_data['other_offers'] = sellers_found
+                else:
+                    extracted_data['other_offers'] = []
+                
+                # Number of other offers fix
+                if extracted_data['other_offers']:
+                    extracted_data['number_of_other_offers'] = str(len(extracted_data['other_offers']))
+                    
+                results.append({
+                    "url": url, 
+                    "status": res.status_code, 
+                    "data": extracted_data
+                })
+            else:
+                results.append({
+                    "url": url, 
+                    "status": res.status_code, 
+                    "error": f"HTTP Error {res.status_code}"
+                })
+                
+        except Exception as e:
+            results.append({
+                "url": url, 
+                "status": 500, 
+                "error": str(e)
+            })
+
+    return jsonify(results)
+
+if __name__ == '__main__':
+    from waitress import serve
+    print("Starting B.TECH CFFI production server with Waitress on port 5002 (Max 8 threads)...")
+    serve(app, host='0.0.0.0', port=5002, threads=8)
